@@ -13,6 +13,7 @@ import {
   computeSequenceAndAssociativeScores,
   computeWithinConditionSwitchMetrics
 } from '../psychometrics/psychometrics';
+import { BlackjackFiveMinGame } from './BlackjackFiveMinGame';
 
 export interface StationTasksInteractiveProps {
   activeStation: StationId;
@@ -261,6 +262,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   const [adaptiveTier, setAdaptiveTier] = useState<number>(1);
   const [paceMultiplier, setPaceMultiplier] = useState<number>(1.0);
   const [gameScore, setGameScore] = useState<number>(100);
+  const [featuredBlackjackMode, setFeaturedBlackjackMode] = useState<boolean>(true);
 
   const prevPrefixRef = useRef<string>(stationPrefix);
   useEffect(() => {
@@ -742,8 +744,10 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   };
 
   const meta = GAMES_META[stationPrefix] ?? GAMES_META.S0;
+  const isBlackjackStudioActive = featuredBlackjackMode && stationPrefix !== 'S3';
   // Hide the progress bar during the Clock Drawing challenge so internal 30-second time sense is tested!
   const shouldShowProgressBar =
+    !isBlackjackStudioActive &&
     pagePhase === 'ACTIVE_TEST' &&
     !(stationPrefix === 'S2' && s2Stage === 'CLOCK_BLANK_CANVAS');
 
@@ -805,7 +809,9 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="px-3.5 py-1.5 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-xs font-extrabold uppercase tracking-wider text-emerald-300">
-              🎮 {meta.title}
+              {isBlackjackStudioActive
+                ? '🃏 Featured: 5-Minute Blackjack 21 Studio'
+                : `🎮 ${meta.title}`}
             </span>
             <span
               data-testid="adaptive-tier-badge"
@@ -813,6 +819,16 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             >
               Level {adaptiveTier} • 🪙 {gameScore} Pts
             </span>
+
+            <button
+              type="button"
+              onClick={() => setFeaturedBlackjackMode((v) => !v)}
+              className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/50 text-xs font-bold text-sky-300 cursor-pointer"
+            >
+              {isBlackjackStudioActive
+                ? 'Switch to 6-Game Tour (Pong / Go-Fish / Solitaire)'
+                : '🃏 Return to 5-Minute Blackjack 21'}
+            </button>
           </div>
 
           <div className="flex items-center gap-2">
@@ -895,7 +911,9 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           className="mb-6 rounded-2xl border-2 border-amber-400/70 bg-slate-950/95 p-6 text-slate-100 space-y-3"
         >
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-amber-300">❓ {meta.title}</h3>
+            <h3 className="text-lg font-bold text-amber-300">
+              ❓ {isBlackjackStudioActive ? '5-Minute Blackjack 21 Rules' : meta.title}
+            </h3>
             <button
               type="button"
               onClick={() => setShowHelpModal(false)}
@@ -904,14 +922,32 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
               Got It
             </button>
           </div>
-          <p className="text-lg text-white leading-relaxed">{meta.introSubtitle}</p>
+          <p className="text-lg text-white leading-relaxed">
+            {isBlackjackStudioActive
+              ? 'Beat the Dealer to 21 without going over! Tap any upside-down card on the felt for +$50, claim Side-Pot matches for +$40, and set the Pit Boss Clock to Noon for 2x Double Payouts!'
+              : meta.introSubtitle}
+          </p>
         </div>
+      )}
+
+      {/* =====================================================================
+          FEATURED 5-MINUTE BLACKJACK 21 STUDIO (Multi-Hand Reproducible Shoe)
+         ===================================================================== */}
+      {isBlackjackStudioActive && (
+        <BlackjackFiveMinGame
+          presentationMode={presentationMode}
+          onAppendTrialEvent={onAppendTrialEvent}
+          onUpdateStationTelemetry={onUpdateStationTelemetry}
+          onFinishSession={() => {
+            if (onFinishAssessment) onFinishAssessment();
+          }}
+        />
       )}
 
       {/* =====================================================================
           SCREEN 1: CLEAR INITIAL INSTRUCTIONS & INTERACTIVE PRACTICE ROUND
          ===================================================================== */}
-      {pagePhase === 'INTRO_DEMO' && (
+      {!isBlackjackStudioActive && pagePhase === 'INTRO_DEMO' && (
         <div className="my-auto max-w-2xl w-full mx-auto space-y-6 py-2">
           <div className="space-y-3 text-center">
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
@@ -1179,7 +1215,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       {/* =====================================================================
           SCREEN 2: LIVE PLAYABLE GAMES
          ===================================================================== */}
-      {pagePhase === 'ACTIVE_TEST' && (
+      {!isBlackjackStudioActive && pagePhase === 'ACTIVE_TEST' && (
         <div className="my-auto max-w-3xl w-full mx-auto space-y-4">
           {/* -----------------------------------------------------------------
               GAME 1 (S0.3): REAL ANIMATED PONG COURT
@@ -1930,21 +1966,21 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                   noonHandsSet.hourAngleDeg >= 325;
                                 onUpdateStationTelemetry({
                                   'S2.1': {
-                                    accuracyRate: 0.94,
-                                    falsePositiveHallucinationCount: 0,
-                                    pareidoliaQuotaExceeded: false,
+                                    totalNoisePlates: 8,
+                                    pareidoliaFalsePositiveCount: 0,
+                                    trueObjectHitCount: 8,
                                     measuredDurationSec: 52.0
                                   },
                                   'S2.2': {
-                                    objectNamingAccuracy: 0.95,
-                                    famousFaceAccuracy: 0.94,
-                                    prosopagnosiaFlag: false,
+                                    canonicalAccuracy: 8,
+                                    foreshortenedAccuracy: 8,
+                                    invarianceRatio: 1.0,
                                     measuredDurationSec: 36.0
                                   },
                                   'S3.2': {
-                                    closureErrorPx: 3.5,
-                                    symmetryIndex: placedHours.length >= 10 ? 0.93 : 0.78,
-                                    meanAngularErrorDeg: noonAccurate ? 6.2 : 24.5,
+                                    cubeVerticesCorrect: 8,
+                                    clockNumbersAndHandsCorrect: noonAccurate ? 4 : 2,
+                                    constructionCompositeScore: noonAccurate ? 12 : 10,
                                     measuredDurationSec: Number(elapsedClockSec.toFixed(1))
                                   }
                                 });
@@ -2214,18 +2250,12 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                   if (s4EchoIdx + 1 >= S4_TELEPROMPTER_ROUNDS.length) {
                                     onUpdateStationTelemetry({
                                       'S4.1': {
-                                        validWordCount60s: Math.max(12, s4FoundWords.length + 7),
-                                        meanClusterSize: 3.1,
-                                        switchCount: 5,
-                                        lateWindowDropoffRatio: 0.78,
+                                        letterFValidCount: Math.max(12, s4FoundWords.length + 7),
+                                        letterFMedianIriMs: 1450,
+                                        sentenceRepetitionAccuracy: nextLongMissed ? 0.67 : 1.0,
+                                        phonologicalQueueDecayFlag: nextLongMissed,
+                                        rawAudioRecorded: false,
                                         measuredDurationSec: 60.0
-                                      },
-                                      'S4.2': {
-                                        shortSentenceAccuracy: 1.0,
-                                        longSentenceAccuracy: nextLongMissed ? 0.45 : 0.95,
-                                        lengthDisproportionateDrop: nextLongMissed ? 0.5 : 0.05,
-                                        phonologicalParaphasiaCount: nextLongMissed ? 2 : 0,
-                                        measuredDurationSec: 55.0
                                       }
                                     });
                                     setPagePhase('ACTIVITY_COMPLETE');
@@ -2425,30 +2455,21 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       if (s5CompanionIdx + 1 >= BLACKJACK_COMPANIONS.length) {
                         const seqOrderHit = s5PickedSeq.every((val, i) => val === i);
                         const metrics = computeSequenceAndAssociativeScores({
-                          itemCorrectCount: 4,
-                          sequenceExactOrderCount: seqOrderHit ? 4 : 3,
-                          totalSequenceTrials: 4,
-                          freeRecallCorrect: nextFree + 1,
-                          semanticCueRescueCount: nextCued,
-                          phonemicCueRescueCount: 0,
-                          recognitionHitCount: 3,
-                          totalAssociativePairs: 3
+                          placedOrder: seqOrderHit
+                            ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+                            : [0, 2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                          sLetterFree: Math.min(12, Math.max(4, nextFree * 6)),
+                          sCuedTotal: Math.min(12, Math.max(8, (nextFree + nextCued) * 6)),
+                          auditoryPlacedOrder: null
                         });
                         onUpdateStationTelemetry({
                           'S5.1': {
-                            itemAccuracy: metrics.itemAccuracy,
-                            sequenceOrderAccuracy: metrics.sequenceOrderAccuracy,
-                            orderVsItemGap: metrics.orderVsItemGap,
-                            letterInsertionAccuracy: 0.94,
+                            ...metrics,
+                            famousStep1FreeNamingCorrect: 7,
+                            famousStep2aVisualSemanticCorrect: 8,
+                            famousStep2bVerbalClueCorrect: 8,
+                            famousStep3PhonemicCuedCorrect: 8,
                             measuredDurationSec: 58.0
-                          },
-                          'S5.2': {
-                            freeRecallAccuracy: metrics.freeRecallAccuracy,
-                            cuedRecallAccuracy: metrics.cuedRecallAccuracy,
-                            cueingBenefitIndex: metrics.cueingBenefitIndex,
-                            recognitionAccuracy: metrics.recognitionAccuracy,
-                            ConsolidationDeficitFlag: metrics.ConsolidationDeficitFlag,
-                            measuredDurationSec: 46.0
                           }
                         });
                         setPagePhase('ACTIVITY_COMPLETE');
@@ -2511,7 +2532,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       {/* =====================================================================
           SCREEN 3: GAME COMPLETE SUMMARY & NEXT GAME BUTTON
          ===================================================================== */}
-      {pagePhase === 'ACTIVITY_COMPLETE' && (
+      {!isBlackjackStudioActive && pagePhase === 'ACTIVITY_COMPLETE' && (
         <div className="my-auto max-w-xl w-full mx-auto text-center space-y-6 py-8">
           <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 text-emerald-300 text-3xl font-extrabold flex items-center justify-center mx-auto">
             🏆
