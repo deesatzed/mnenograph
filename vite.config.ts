@@ -7,6 +7,13 @@ const stubPath = path.resolve(__dirname, 'src/xrblocksOptionalPeerStub.ts');
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    port: 5174,
+    strictPort: true
+  },
+  preview: {
+    port: 5174
+  },
   resolve: {
     alias: [
       { find: '@pmndrs/uikit/webgpu', replacement: stubPath },
