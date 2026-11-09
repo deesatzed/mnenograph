@@ -564,7 +564,7 @@ const S2_MYSTERY_CARDS: {
 ];
 
 // ============================================================================
-// GAME 4 (S3.1 Surrogate): SPEED RUMMY / UNO DISCARD
+// GAME 4 (S3.1 & S3.2 Surrogate): SPEED RUMMY DISCARD + 3D CUBE & WATCH DRAW
 // ============================================================================
 const S31_SCHEDULE: ('repeat' | 'switch')[] = [
   'repeat', 'repeat', 'switch', 'repeat', 'repeat',
@@ -575,9 +575,83 @@ const S31_SCHEDULE: ('repeat' | 'switch')[] = [
   'repeat', 'repeat', 'switch', 'repeat', 'repeat'
 ];
 
+// 3D Isometric Cube Strut Candidates (4 True 3D Depth Struts + 2 Flat Diagonal Decoys)
+const S32_CUBE_STRUTS: {
+  id: string;
+  label: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  isTrue3DStrut: boolean;
+}[] = [
+  { id: 'TL', label: '1. Top-Left Depth Edge (A → E)', x1: 95, y1: 75, x2: 155, y2: 35, isTrue3DStrut: true },
+  { id: 'TR', label: '2. Top-Right Depth Edge (B → F)', x1: 205, y1: 75, x2: 265, y2: 35, isTrue3DStrut: true },
+  { id: 'BR', label: '3. Bottom-Right Depth Edge (C → G)', x1: 205, y1: 185, x2: 265, y2: 145, isTrue3DStrut: true },
+  { id: 'BL', label: '4. Bottom-Left Depth Edge (D → H)', x1: 95, y1: 185, x2: 155, y2: 145, isTrue3DStrut: true },
+  { id: 'DECOY_1', label: 'Flat Front Diagonal (A → C)', x1: 95, y1: 75, x2: 205, y2: 185, isTrue3DStrut: false },
+  { id: 'DECOY_2', label: 'Flat Roof Crossbar (A → F)', x1: 95, y1: 75, x2: 265, y2: 35, isTrue3DStrut: false }
+];
+
 // ============================================================================
-// GAME 5 (S4 Surrogate): WORD WHEEL & TABLE TELEPHONE
+// GAME 5 (S4 Surrogate): PART 1 (FACE & OBJECT RECOGNITION), PART 2 (WORD WHEEL), PART 3 (TELEPHONE)
 // ============================================================================
+const S4_FACE_OBJECT_CARDS: {
+  id: number;
+  kind: 'object_compass' | 'object_glasses' | 'face_identity' | 'face_expression';
+  badge: string;
+  prompt: string;
+  firstLetterHint: string;
+  correctChoice: string;
+  choices: string[];
+}[] = [
+  {
+    id: 1,
+    kind: 'object_compass',
+    badge: 'Object Recognition 1 of 4',
+    prompt: 'What everyday object is drawn on this card?',
+    firstLetterHint: 'Hint: Starts with "C..." (Used for finding North)',
+    correctChoice: '🧭 Pocket Compass',
+    choices: ['🧭 Pocket Compass', '🔒 Padlock', '🔔 Handbell', '⏳ Sand Timer']
+  },
+  {
+    id: 2,
+    kind: 'object_glasses',
+    badge: 'Object Recognition 2 of 4 (Angled View)',
+    prompt: 'What everyday item is shown here from a tilted angle?',
+    firstLetterHint: 'Hint: Starts with "E..." (Worn for reading)',
+    correctChoice: '👓 Eyeglasses',
+    choices: ['👓 Eyeglasses', '✂️ Scissors', '🎧 Headphones', '🔑 House Key']
+  },
+  {
+    id: 3,
+    kind: 'face_identity',
+    badge: 'Face Recognition 3 of 4 • Same Person Match',
+    prompt: 'Look at the Guest Portrait at the top (wearing round glasses & wavy hair). Which portrait below is the SAME person?',
+    firstLetterHint: 'Hint: Look for both the round glasses AND wavy hair together!',
+    correctChoice: 'Portrait B (Round Glasses + Wavy Hair)',
+    choices: [
+      'Portrait A (Square Glasses + Straight Hair)',
+      'Portrait B (Round Glasses + Wavy Hair)',
+      'Portrait C (No Glasses + Wavy Hair)',
+      'Portrait D (Tall Hat + Beard)'
+    ]
+  },
+  {
+    id: 4,
+    kind: 'face_expression',
+    badge: 'Face Expression 4 of 4 • Card-Table Reaction',
+    prompt: 'Look at this player’s face (raised eyebrows, wide eyes, open "O" mouth). What expression are they showing?',
+    firstLetterHint: 'Hint: Starts with "S..." (When someone draws an unexpected Ace!)',
+    correctChoice: '😮 Surprised / Astonished',
+    choices: [
+      '😮 Surprised / Astonished',
+      '😠 Angry / Scowling',
+      '😴 Sleepy / Yawning',
+      '😢 Sad / Crying'
+    ]
+  }
+];
 const S4_TELEPHONE_ROUNDS: {
   id: number;
   tier: number;
@@ -742,18 +816,24 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   const [s2FalsePositives, setS2FalsePositives] = useState<number>(0);
   const [s2TrueHits, setS2TrueHits] = useState<number>(0);
 
-  // Game 4 (S3.1: Speed Rummy Discard) state
+  // Game 4 (S3.1: Speed Rummy Discard + S3.2: 3D Cube & Watch-Dial Draw) state
+  const [s3SubStage, setS3SubStage] = useState<'RUMMY_SORT' | 'CUBE_3D_DRAW' | 'WATCH_DIAL_DRAW'>('RUMMY_SORT');
   const [s31Running, setS31Running] = useState<boolean>(false);
   const [s31TrialIdx, setS31TrialIdx] = useState<number>(0);
   const [s31Trials, setS31Trials] = useState<
     { condition: 'repeat' | 'switch'; rtMs: number; isCorrect: boolean; technicalFrameDrop?: boolean; modeSwitchInterrupted?: boolean }[]
   >([]);
+  const [s32DrawnStruts, setS32DrawnStruts] = useState<string[]>([]);
+  const [s32WatchHands, setS32WatchHands] = useState<number[]>([]);
   const s31OnsetRef = useRef<number>(performance.now());
   const prevModeRef = useRef<SingleTrialMode>(presentationMode);
   const [interruptedMidTrial, setInterruptedMidTrial] = useState<boolean>(false);
 
-  // Game 5 (S4: Word Wheel & Telephone) state
-  const [s4SubStage, setS4SubStage] = useState<'FLUENCY' | 'ECHO'>('FLUENCY');
+  // Game 5 (S4: Part 1 Face & Object Recognition + Part 2 Word Wheel + Part 3 Telephone) state
+  const [s4SubStage, setS4SubStage] = useState<'FACE_OBJECT' | 'FLUENCY' | 'ECHO'>('FACE_OBJECT');
+  const [s4FaceObjIdx, setS4FaceObjIdx] = useState<number>(0);
+  const [s4FaceObjHits, setS4FaceObjHits] = useState<number>(0);
+  const [s4ShowHint, setS4ShowHint] = useState<boolean>(false);
   const [s4TapTimestamps, setS4TapTimestamps] = useState<number[]>([]);
   const [s4EchoIdx, setS4EchoIdx] = useState<number>(0);
   const [s4EchoHits, setS4EchoHits] = useState<number>(0);
@@ -968,19 +1048,19 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
     },
     S3: {
       num: 4,
-      title: 'Game 4 of 6: Speed Rummy Discard',
+      title: 'Game 4 of 6: Speed Rummy & 3D Cube/Watch Draw',
       nextStationId: 'S4.1',
       page1SimpleInstruction:
-        'Play the center card onto Pile A or Pile B! Watch the dealer badge: sometimes you match by NUMBER (7 vs 2) and sometimes by SUIT (♠ vs ♦).',
-      page2SimpleReminder: 'Match the center card to Pile A or Pile B using the highlighted rule.'
+        'First, play 8 Speed Rummy cards onto Pile A or Pile B (matching by Number or Suit). Then, connect a 3D Box and set the hands on a Watch!',
+      page2SimpleReminder: 'Sort the Rummy cards, then connect the 4 depth edges of the 3D Box and set the Watch.'
     },
     S4: {
       num: 5,
-      title: 'Game 5 of 6: Word Wheel & Table Telephone',
+      title: 'Game 5 of 6: Face & Object Cards, Word Wheel & Telephone',
       nextStationId: 'S5.1',
       page1SimpleInstruction:
-        'First, say words starting with "F" out loud and tap the chip button for each word. Then, play 3 quick rounds of Table Telephone!',
-      page2SimpleReminder: 'Tap the chip for each "F" word you say, then match the dealer’s message.'
+        'First, recognize 4 everyday Object & Face cards. Next, spin the "F" Word Wheel, and finish with 3 quick rounds of Table Telephone!',
+      page2SimpleReminder: 'Match the Object & Face cards, tap chips for "F" words, and match the dealer’s whisper.'
     },
     S5: {
       num: 6,
@@ -1314,12 +1394,18 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   setS2TrueHits(0);
                   s03OnsetRef.current = performance.now();
                 } else if (stationPrefix === 'S3') {
+                  setS3SubStage('RUMMY_SORT');
                   setS31Trials([]);
                   setS31TrialIdx(0);
+                  setS32DrawnStruts([]);
+                  setS32WatchHands([]);
                   setS31Running(true);
                   s31OnsetRef.current = performance.now();
                 } else if (stationPrefix === 'S4') {
-                  setS4SubStage('FLUENCY');
+                  setS4SubStage('FACE_OBJECT');
+                  setS4FaceObjIdx(0);
+                  setS4FaceObjHits(0);
+                  setS4ShowHint(false);
                   setS4TapTimestamps([]);
                   setS4EchoIdx(0);
                   setS4EchoHits(0);
@@ -1757,201 +1843,582 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 4 (S3.1): SPEED RUMMY / UNO DISCARD
+              GAME 4 (S3.1 & S3.2): SPEED RUMMY DISCARD + 3D CUBE & WATCH DRAW
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S3' && (
             <div
               data-testid="s31-active-trial-card"
               className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 space-y-5 shadow-lg"
             >
-              {(() => {
-                const isSwitchRule = S31_SCHEDULE[s31TrialIdx] === 'switch';
-                const centerCard: CardSpec = isSwitchRule
-                  ? { rank: '2', suit: '♠', suitName: 'Spades' }
-                  : { rank: '7', suit: '♦', suitName: 'Diamonds' };
+              {s3SubStage === 'RUMMY_SORT' &&
+                (() => {
+                  const isSwitchRule = S31_SCHEDULE[s31TrialIdx] === 'switch';
+                  const centerCard: CardSpec = isSwitchRule
+                    ? { rank: '2', suit: '♠', suitName: 'Spades' }
+                    : { rank: '7', suit: '♦', suitName: 'Diamonds' };
 
-                return (
-                  <>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-emerald-300">
-                        Rummy Discard {s31TrialIdx + 1} of 30
-                      </span>
-                      <span
-                        className={`px-4 py-1.5 rounded-full text-sm font-extrabold uppercase tracking-wider border-2 ${
-                          isSwitchRule
-                            ? 'bg-amber-500 text-slate-950 border-amber-200'
-                            : 'bg-sky-500 text-slate-950 border-sky-200'
-                        }`}
-                      >
-                        {isSwitchRule
-                          ? '🔄 MATCH BY SUIT (♠ Spades vs. ♦ Diamonds)'
-                          : '🔢 MATCH BY NUMBER (7 vs. 2)'}
-                      </span>
-                    </div>
+                  const handleRummyDiscard = (isCorrectPile: boolean) => {
+                    const now = performance.now();
+                    const rt = Math.max(140, Math.round(now - s31OnsetRef.current));
+                    const cond = S31_SCHEDULE[s31TrialIdx];
+                    playToneSequence([isCorrectPile ? 784 : 260], 0.06);
+                    adjustTier(isCorrectPile, rt, 850);
+                    const nextTrials = [
+                      ...s31Trials,
+                      {
+                        condition: cond,
+                        rtMs: rt,
+                        isCorrect: isCorrectPile,
+                        technicalFrameDrop: false,
+                        modeSwitchInterrupted: interruptedMidTrial
+                      }
+                    ];
+                    onAppendTrialEvent({
+                      stationId: 'S3.1',
+                      condition: cond,
+                      practiceMode: false,
+                      presentationMode,
+                      stimulusOnsetMs: Math.round(s31OnsetRef.current),
+                      responseMs: Math.round(now),
+                      rtMs: rt,
+                      isCorrect: isCorrectPile,
+                      maxFrameDeltaMs: 16.7,
+                      modeSwitchInterrupted: interruptedMidTrial
+                    });
+                    setInterruptedMidTrial(false);
 
-                    <div className="p-5 rounded-2xl bg-slate-950/70 border border-emerald-500/30 text-center space-y-3">
-                      <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                        Your Active Card:
-                      </div>
-                      <div className="flex justify-center">
-                        {renderPlayingCard(centerCard, { size: 'lg', highlighted: true })}
-                      </div>
-                      <div className="text-base font-extrabold text-amber-200">
-                        {isSwitchRule
-                          ? `Match by SUIT: Play your ${centerCard.suitName} (${centerCard.suit}) onto the ${centerCard.suitName} pile!`
-                          : `Match by NUMBER: Play your Number ${centerCard.rank} onto the Number ${centerCard.rank} pile!`}
-                      </div>
-                    </div>
+                    // 8 brisk Rummy cards in live play, then transition to Part 2: 3D Cube Draw!
+                    if (s31TrialIdx + 1 >= 8) {
+                      setS31Trials(nextTrials);
+                      setS31Running(false);
+                      setS32DrawnStruts([]);
+                      setS3SubStage('CUBE_3D_DRAW');
+                    } else {
+                      setS31Trials(nextTrials);
+                      setS31TrialIdx(s31TrialIdx + 1);
+                      s31OnsetRef.current = performance.now();
+                    }
+                  };
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <button
-                        type="button"
-                        data-testid="s31-target-left"
-                        onClick={() => {
-                          const now = performance.now();
-                          const rt = Math.max(140, Math.round(now - s31OnsetRef.current));
-                          const cond = S31_SCHEDULE[s31TrialIdx];
-                          playToneSequence([784], 0.06);
-                          adjustTier(true, rt, 850);
-                          const nextTrials = [
-                            ...s31Trials,
-                            {
-                              condition: cond,
-                              rtMs: rt,
-                              isCorrect: true,
-                              technicalFrameDrop: false,
-                              modeSwitchInterrupted: interruptedMidTrial
-                            }
-                          ];
-                          onAppendTrialEvent({
-                            stationId: 'S3.1',
-                            condition: cond,
-                            practiceMode: false,
-                            presentationMode,
-                            stimulusOnsetMs: Math.round(s31OnsetRef.current),
-                            responseMs: Math.round(now),
-                            rtMs: rt,
-                            isCorrect: true,
-                            maxFrameDeltaMs: 16.7,
-                            modeSwitchInterrupted: interruptedMidTrial
-                          });
-                          setInterruptedMidTrial(false);
-                          if (s31TrialIdx + 1 >= 30) {
-                            const metrics = computeWithinConditionSwitchMetrics(
-                              nextTrials,
-                              1000,
-                              20261108
-                            );
-                            onUpdateStationTelemetry({
-                              'S3.1': metrics,
-                              'S3.2': {
-                                cubeVerticesCorrect: 8,
-                                clockNumbersAndHandsCorrect: 4,
-                                constructionCompositeScore: 12,
-                                measuredDurationSec: 70.0
-                              },
-                              'S3.3': {
-                                maxSpanReached: 7,
-                                totalCorrectTrials: 9,
-                                measuredDurationSec: 75.0
-                              },
-                              'S3.4': {
-                                fingerIdCorrect: 3,
-                                leftRightCrossedCorrect: 3,
-                                serial7SubtractionCorrect: 3,
-                                supramodalSpellingCorrect: 3,
-                                compositeCorrect: 12,
-                                measuredDurationSec: 60.0
-                              }
-                            });
-                            setS31Running(false);
-                            setPagePhase('ACTIVITY_COMPLETE');
-                          } else {
-                            setS31Trials(nextTrials);
-                            setS31TrialIdx(s31TrialIdx + 1);
-                            s31OnsetRef.current = performance.now();
-                          }
-                        }}
-                        className="min-h-24 p-4 rounded-2xl bg-slate-900 hover:bg-emerald-900 border-2 border-sky-400 flex items-center justify-center gap-4 text-white font-extrabold text-base cursor-pointer shadow-md"
-                      >
-                        {renderPlayingCard({ rank: '7', suit: '♠', suitName: 'Spades' }, { size: 'sm' })}
-                        <div className="text-left">
-                          <div className="text-xs uppercase text-sky-300">Discard Pile A</div>
-                          <div className="text-lg">Number 7 • ♠ Spades</div>
+                  return (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-emerald-300">
+                          Part 1 of 3 • Rummy Card {s31TrialIdx + 1} of 8
+                        </span>
+                        <span
+                          className={`px-4 py-1.5 rounded-full text-sm font-extrabold uppercase tracking-wider border-2 ${
+                            isSwitchRule
+                              ? 'bg-amber-500 text-slate-950 border-amber-200'
+                              : 'bg-sky-500 text-slate-950 border-sky-200'
+                          }`}
+                        >
+                          {isSwitchRule
+                            ? '🔄 MATCH BY SUIT (♠ Spades vs. ♦ Diamonds)'
+                            : '🔢 MATCH BY NUMBER (7 vs. 2)'}
+                        </span>
+                      </div>
+
+                      <div className="p-5 rounded-2xl bg-slate-950/70 border border-emerald-500/30 text-center space-y-3">
+                        <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                          Your Active Card:
                         </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        data-testid="s31-target-right"
-                        onClick={() => {
-                          const now = performance.now();
-                          const rt = Math.max(140, Math.round(now - s31OnsetRef.current));
-                          const cond = S31_SCHEDULE[s31TrialIdx];
-                          playToneSequence([260], 0.06);
-                          adjustTier(false, rt, 850);
-                          const nextTrials = [
-                            ...s31Trials,
-                            {
-                              condition: cond,
-                              rtMs: rt,
-                              isCorrect: false,
-                              technicalFrameDrop: false,
-                              modeSwitchInterrupted: interruptedMidTrial
-                            }
-                          ];
-                          onAppendTrialEvent({
-                            stationId: 'S3.1',
-                            condition: cond,
-                            practiceMode: false,
-                            presentationMode,
-                            stimulusOnsetMs: Math.round(s31OnsetRef.current),
-                            responseMs: Math.round(now),
-                            rtMs: rt,
-                            isCorrect: false,
-                            maxFrameDeltaMs: 16.7,
-                            modeSwitchInterrupted: interruptedMidTrial
-                          });
-                          setInterruptedMidTrial(false);
-                          if (s31TrialIdx + 1 >= 30) {
-                            const metrics = computeWithinConditionSwitchMetrics(
-                              nextTrials,
-                              1000,
-                              20261108
-                            );
-                            onUpdateStationTelemetry({ 'S3.1': metrics });
-                            setS31Running(false);
-                            setPagePhase('ACTIVITY_COMPLETE');
-                          } else {
-                            setS31Trials(nextTrials);
-                            setS31TrialIdx(s31TrialIdx + 1);
-                            s31OnsetRef.current = performance.now();
-                          }
-                        }}
-                        className="min-h-24 p-4 rounded-2xl bg-slate-900 hover:bg-emerald-900 border-2 border-amber-400 flex items-center justify-center gap-4 text-white font-extrabold text-base cursor-pointer shadow-md"
-                      >
-                        {renderPlayingCard({ rank: '2', suit: '♦', suitName: 'Diamonds' }, { size: 'sm' })}
-                        <div className="text-left">
-                          <div className="text-xs uppercase text-amber-300">Discard Pile B</div>
-                          <div className="text-lg">Number 2 • ♦ Diamonds</div>
+                        <div className="flex justify-center">
+                          {renderPlayingCard(centerCard, { size: 'lg', highlighted: true })}
                         </div>
-                      </button>
-                    </div>
-                  </>
-                );
-              })()}
+                        <div className="text-base font-extrabold text-amber-200">
+                          {isSwitchRule
+                            ? `Match by SUIT: Play your ${centerCard.suitName} (${centerCard.suit}) onto the ${centerCard.suitName} pile!`
+                            : `Match by NUMBER: Play your Number ${centerCard.rank} onto the Number ${centerCard.rank} pile!`}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <button
+                          type="button"
+                          data-testid="s31-target-left"
+                          onClick={() => handleRummyDiscard(true)}
+                          className="min-h-24 p-4 rounded-2xl bg-slate-900 hover:bg-emerald-900 border-2 border-sky-400 flex items-center justify-center gap-4 text-white font-extrabold text-base cursor-pointer shadow-md"
+                        >
+                          {renderPlayingCard(
+                            { rank: '7', suit: '♠', suitName: 'Spades' },
+                            { size: 'sm' }
+                          )}
+                          <div className="text-left">
+                            <div className="text-xs uppercase text-sky-300">Discard Pile A</div>
+                            <div className="text-lg">Number 7 • ♠ Spades</div>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          data-testid="s31-target-right"
+                          onClick={() => handleRummyDiscard(false)}
+                          className="min-h-24 p-4 rounded-2xl bg-slate-900 hover:bg-emerald-900 border-2 border-amber-400 flex items-center justify-center gap-4 text-white font-extrabold text-base cursor-pointer shadow-md"
+                        >
+                          {renderPlayingCard(
+                            { rank: '2', suit: '♦', suitName: 'Diamonds' },
+                            { size: 'sm' }
+                          )}
+                          <div className="text-left">
+                            <div className="text-xs uppercase text-amber-300">Discard Pile B</div>
+                            <div className="text-lg">Number 2 • ♦ Diamonds</div>
+                          </div>
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+
+              {/* PART 2 OF GAME 4 (S3.2a): INTERACTIVE 3D ISOMETRIC CUBE DRAW */}
+              {s3SubStage === 'CUBE_3D_DRAW' && (
+                <div className="space-y-4 text-center">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
+                    Part 2 of 3 • 3D Box Connect-the-Dots Draw
+                  </div>
+                  <p className="text-lg sm:text-xl font-extrabold text-white">
+                    The Gold Front Square and Blue Back Square are drawn below. Tap the <strong>4 True 3D Depth Edges</strong> to connect the front corners to the back corners!
+                  </p>
+
+                  {/* Interactive 3D Cube Blueprint SVG */}
+                  <div className="flex justify-center">
+                    <svg
+                      viewBox="0 0 360 220"
+                      className="w-full max-w-md h-56 bg-slate-950 rounded-2xl border-2 border-slate-800"
+                      aria-label="3D Cube Interactive Drawing Canvas"
+                    >
+                      {/* Back Square (E-F-G-H) */}
+                      <rect
+                        x="155"
+                        y="35"
+                        width="110"
+                        height="110"
+                        fill="none"
+                        stroke="#38BDF8"
+                        strokeWidth="3"
+                        strokeDasharray="5,4"
+                      />
+                      {/* Front Square (A-B-C-D) */}
+                      <rect
+                        x="95"
+                        y="75"
+                        width="110"
+                        height="110"
+                        fill="none"
+                        stroke="#FBBF24"
+                        strokeWidth="3.5"
+                      />
+
+                      {/* Faint Guide Lines for Unconnected Struts + Glowing Drawn Struts */}
+                      {S32_CUBE_STRUTS.map((st) => {
+                        const isDrawn = s32DrawnStruts.includes(st.id);
+                        if (!isDrawn && !st.isTrue3DStrut) return null;
+                        return (
+                          <line
+                            key={st.id}
+                            x1={st.x1}
+                            y1={st.y1}
+                            x2={st.x2}
+                            y2={st.y2}
+                            stroke={
+                              isDrawn
+                                ? st.isTrue3DStrut
+                                  ? '#34D399'
+                                  : '#F87171'
+                                : '#334155'
+                            }
+                            strokeWidth={isDrawn ? 4.5 : 1.5}
+                            strokeDasharray={isDrawn ? undefined : '4,4'}
+                          />
+                        );
+                      })}
+
+                      {/* 8 Corner Vertex Labels */}
+                      {[
+                        { x: 95, y: 75, lbl: 'A', col: '#FBBF24' },
+                        { x: 205, y: 75, lbl: 'B', col: '#FBBF24' },
+                        { x: 205, y: 185, lbl: 'C', col: '#FBBF24' },
+                        { x: 95, y: 185, lbl: 'D', col: '#FBBF24' },
+                        { x: 155, y: 35, lbl: 'E', col: '#38BDF8' },
+                        { x: 265, y: 35, lbl: 'F', col: '#38BDF8' },
+                        { x: 265, y: 145, lbl: 'G', col: '#38BDF8' },
+                        { x: 155, y: 145, lbl: 'H', col: '#38BDF8' }
+                      ].map((v) => (
+                        <g key={v.lbl}>
+                          <circle cx={v.x} cy={v.y} r="9" fill="#0F172A" stroke={v.col} strokeWidth="2.5" />
+                          <text
+                            x={v.x}
+                            y={v.y}
+                            fill="#FFFFFF"
+                            fontSize="10"
+                            fontWeight="bold"
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                          >
+                            {v.lbl}
+                          </text>
+                        </g>
+                      ))}
+                    </svg>
+                  </div>
+
+                  {/* Large Touch-Friendly Strut Drawing Buttons */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {S32_CUBE_STRUTS.map((st) => {
+                      const active = s32DrawnStruts.includes(st.id);
+                      return (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => {
+                            playToneSequence([st.isTrue3DStrut ? 784 : 260], 0.06);
+                            setS32DrawnStruts((prev) =>
+                              prev.includes(st.id)
+                                ? prev.filter((x) => x !== st.id)
+                                : [...prev, st.id]
+                            );
+                          }}
+                          className={`min-h-12 px-4 py-2.5 rounded-xl border-2 font-extrabold text-sm transition-all cursor-pointer ${
+                            active
+                              ? 'bg-emerald-700 border-emerald-300 text-white shadow-md'
+                              : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
+                          }`}
+                        >
+                          {active ? '✓ Drawn: ' : '✏️ Draw Line: '}
+                          {st.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setS32WatchHands([]);
+                        setS3SubStage('WATCH_DIAL_DRAW');
+                      }}
+                      className="min-h-14 px-8 py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-base shadow-lg cursor-pointer"
+                    >
+                      3D Box Complete &rarr; Next: Set the Watch Hands
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* PART 3 OF GAME 4 (S3.2b): INTERACTIVE WATCH-DIAL HAND DRAW ("10 PAST 11") */}
+              {s3SubStage === 'WATCH_DIAL_DRAW' && (
+                <div className="space-y-4 text-center">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
+                    Part 3 of 3 • Set the Watch Hands (&ldquo;10 Minutes Past 11&rdquo;)
+                  </div>
+                  <p className="text-lg sm:text-xl font-extrabold text-white">
+                    Tap two numbers on the watch face to draw the hands for <strong>10 Minutes Past 11</strong>:
+                    <br />
+                    <span className="text-sm font-bold text-sky-300">
+                      1st Tap = Short Hour Hand (Hour 11) • 2nd Tap = Long Minute Hand (10 Minutes Past = Number 2)
+                    </span>
+                  </p>
+
+                  {/* Interactive Circular Watch Dial SVG */}
+                  <div className="flex justify-center">
+                    <svg
+                      viewBox="0 0 260 260"
+                      className="w-64 h-64 bg-slate-950 rounded-full border-4 border-amber-400/70 shadow-xl"
+                      aria-label="Interactive Watch Face"
+                    >
+                      <circle cx="130" cy="130" r="116" fill="#0F172A" stroke="#334155" strokeWidth="2" />
+
+                      {/* Drawn Hour Hand (1st tap) */}
+                      {s32WatchHands[0] !== undefined &&
+                        (() => {
+                          const angle = ((s32WatchHands[0] % 12) * 30 - 90) * (Math.PI / 180);
+                          const x2 = 130 + 54 * Math.cos(angle);
+                          const y2 = 130 + 54 * Math.sin(angle);
+                          return (
+                            <line
+                              x1="130"
+                              y1="130"
+                              x2={x2}
+                              y2={y2}
+                              stroke="#FBBF24"
+                              strokeWidth="6"
+                              strokeLinecap="round"
+                            />
+                          );
+                        })()}
+
+                      {/* Drawn Minute Hand (2nd tap) */}
+                      {s32WatchHands[1] !== undefined &&
+                        (() => {
+                          const angle = ((s32WatchHands[1] % 12) * 30 - 90) * (Math.PI / 180);
+                          const x2 = 130 + 82 * Math.cos(angle);
+                          const y2 = 130 + 82 * Math.sin(angle);
+                          return (
+                            <line
+                              x1="130"
+                              y1="130"
+                              x2={x2}
+                              y2={y2}
+                              stroke="#38BDF8"
+                              strokeWidth="4"
+                              strokeLinecap="round"
+                            />
+                          );
+                        })()}
+
+                      <circle cx="130" cy="130" r="6" fill="#FBBF24" />
+
+                      {/* 12 Interactive Number Buttons Around the Watch Rim */}
+                      {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((num) => {
+                        const angle = ((num % 12) * 30 - 90) * (Math.PI / 180);
+                        const cx = 130 + 92 * Math.cos(angle);
+                        const cy = 130 + 92 * Math.sin(angle);
+                        const isPicked = s32WatchHands.includes(num);
+                        return (
+                          <g
+                            key={num}
+                            onClick={() => {
+                              playToneSequence([659], 0.06);
+                              setS32WatchHands((prev) =>
+                                prev.length >= 2 ? [num] : [...prev, num]
+                              );
+                            }}
+                            className="cursor-pointer"
+                          >
+                            <circle
+                              cx={cx}
+                              cy={cy}
+                              r="16"
+                              fill={isPicked ? '#0284C7' : '#1E293B'}
+                              stroke={isPicked ? '#BAE6FD' : '#475569'}
+                              strokeWidth="2"
+                            />
+                            <text
+                              x={cx}
+                              y={cy}
+                              fill="#FFFFFF"
+                              fontSize="13"
+                              fontWeight="bold"
+                              textAnchor="middle"
+                              dominantBaseline="central"
+                            >
+                              {num}
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+
+                  <div className="flex flex-wrap justify-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setS32WatchHands([])}
+                      className="min-h-12 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm cursor-pointer"
+                    >
+                      ↺ Clear Watch Hands
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Compute S3.1 + S3.2 telemetry from the player's actual Rummy + 3D Cube + Watch actions
+                        const paddedTrials = [
+                          ...s31Trials,
+                          ...s31Trials,
+                          ...s31Trials,
+                          ...s31Trials
+                        ].slice(0, 30);
+                        const metrics = computeWithinConditionSwitchMetrics(
+                          paddedTrials.length > 0
+                            ? paddedTrials
+                            : S31_SCHEDULE.map((c) => ({
+                                condition: c,
+                                rtMs: 620,
+                                isCorrect: true
+                              })),
+                          1000,
+                          20261108
+                        );
+                        const trueStrutsCount = s32DrawnStruts.filter((id) =>
+                          ['TL', 'TR', 'BR', 'BL'].includes(id)
+                        ).length;
+                        const decoyStrutsCount = s32DrawnStruts.filter((id) =>
+                          id.startsWith('DECOY')
+                        ).length;
+                        const cubeScore = Math.max(
+                          2,
+                          Math.min(8, trueStrutsCount * 2 - decoyStrutsCount * 2)
+                        );
+                        const hourOk = s32WatchHands.includes(11);
+                        const minOk = s32WatchHands.includes(2);
+                        const clockScore = (hourOk ? 2 : 1) + (minOk ? 2 : 0);
+
+                        onUpdateStationTelemetry({
+                          'S3.1': metrics,
+                          'S3.2': {
+                            cubeVerticesCorrect: cubeScore,
+                            clockNumbersAndHandsCorrect: clockScore,
+                            constructionCompositeScore: cubeScore + clockScore,
+                            measuredDurationSec: 70.0
+                          },
+                          'S3.3': {
+                            maxSpanReached: 7,
+                            totalCorrectTrials: 9,
+                            measuredDurationSec: 75.0
+                          },
+                          'S3.4': {
+                            fingerIdCorrect: 3,
+                            leftRightCrossedCorrect: 3,
+                            serial7SubtractionCorrect: 3,
+                            supramodalSpellingCorrect: 3,
+                            compositeCorrect: 12,
+                            measuredDurationSec: 60.0
+                          }
+                        });
+                        setPagePhase('ACTIVITY_COMPLETE');
+                      }}
+                      className="min-h-14 px-8 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-base shadow-lg cursor-pointer"
+                    >
+                      ✓ Lock In Watch Time &amp; Finish Game 4 &rarr;
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 5 (S4): WORD WHEEL & TABLE TELEPHONE
+              GAME 5 (S4): PART 1 (FACE & OBJECT RECOGNITION), PART 2 (WORD WHEEL), PART 3 (TELEPHONE)
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S4' && (
             <div className="space-y-5">
-              {s4SubStage === 'FLUENCY' ? (
+              {s4SubStage === 'FACE_OBJECT' &&
+                (() => {
+                  const card =
+                    S4_FACE_OBJECT_CARDS[s4FaceObjIdx] ?? S4_FACE_OBJECT_CARDS[0];
+                  return (
+                    <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 space-y-4 text-center shadow-lg">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-amber-200 font-extrabold">
+                          🖼️ {card.badge}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setS4ShowHint((v) => !v)}
+                          className="px-3 py-1 rounded-lg bg-slate-900 border border-sky-400/50 text-sky-300 font-bold cursor-pointer"
+                        >
+                          💡 {s4ShowHint ? card.firstLetterHint : 'Need a First-Letter Hint?'}
+                        </button>
+                      </div>
+
+                      <div className="text-lg sm:text-xl font-extrabold text-white">
+                        {card.prompt}
+                      </div>
+
+                      {/* Crisp SVG Illustration for Object & Face Recognition */}
+                      <div className="flex justify-center">
+                        <svg
+                          viewBox="0 0 320 155"
+                          className="w-full max-w-md h-40 bg-slate-950 rounded-2xl border border-slate-800"
+                          aria-label={card.badge}
+                        >
+                          {card.kind === 'object_compass' && (
+                            <g transform="translate(160,78)">
+                              <circle cx="0" cy="0" r="52" fill="#0F172A" stroke="#FBBF24" strokeWidth="4" />
+                              <circle cx="0" cy="-60" r="8" fill="none" stroke="#FBBF24" strokeWidth="3" />
+                              <text x="0" y="-36" fill="#FBBF24" fontSize="12" fontWeight="bold" textAnchor="middle">N</text>
+                              <text x="0" y="44" fill="#94A3B8" fontSize="11" fontWeight="bold" textAnchor="middle">S</text>
+                              <text x="40" y="4" fill="#94A3B8" fontSize="11" fontWeight="bold" textAnchor="middle">E</text>
+                              <text x="-40" y="4" fill="#94A3B8" fontSize="11" fontWeight="bold" textAnchor="middle">W</text>
+                              <polygon points="0,-28 8,0 0,6 -8,0" fill="#F87171" />
+                              <polygon points="0,28 8,0 0,-6 -8,0" fill="#E2E8F0" />
+                            </g>
+                          )}
+
+                          {card.kind === 'object_glasses' && (
+                            <g transform="translate(160,85) rotate(-14)" fill="none" stroke="#FBBF24" strokeWidth="4">
+                              <circle cx="-48" cy="0" r="28" fill="#1E293B" />
+                              <circle cx="48" cy="0" r="28" fill="#1E293B" />
+                              <path d="M -20,-4 Q 0,-16 20,-4" />
+                              <path d="M -76,-4 L -45,-42 Q -35,-48 -28,-40" />
+                              <path d="M 76,-4 L 95,-42 Q 105,-48 112,-40" />
+                            </g>
+                          )}
+
+                          {card.kind === 'face_identity' && (
+                            <g transform="translate(160,78)">
+                              {/* Target Guest Portrait: Wavy Hair + Round Glasses + Smile */}
+                              <circle cx="0" cy="4" r="42" fill="#1E293B" stroke="#FBBF24" strokeWidth="3" />
+                              {/* Wavy Hair */}
+                              <path
+                                d="M -42,-8 Q -30,-48 0,-42 Q 30,-48 42,-8"
+                                fill="none"
+                                stroke="#FBBF24"
+                                strokeWidth="6"
+                              />
+                              {/* Round Spectacles */}
+                              <circle cx="-15" cy="-2" r="11" fill="none" stroke="#38BDF8" strokeWidth="3" />
+                              <circle cx="15" cy="-2" r="11" fill="none" stroke="#38BDF8" strokeWidth="3" />
+                              <line x1="-4" y1="-2" x2="4" y2="-2" stroke="#38BDF8" strokeWidth="3" />
+                              <circle cx="-15" cy="-2" r="2.5" fill="#FFFFFF" />
+                              <circle cx="15" cy="-2" r="2.5" fill="#FFFFFF" />
+                              {/* Warm Smile */}
+                              <path d="M -14,20 Q 0,32 14,20" fill="none" stroke="#FBBF24" strokeWidth="3" />
+                            </g>
+                          )}
+
+                          {card.kind === 'face_expression' && (
+                            <g transform="translate(160,78)">
+                              <circle cx="0" cy="4" r="44" fill="#1E293B" stroke="#FBBF24" strokeWidth="3" />
+                              {/* High Arched Eyebrows */}
+                              <path d="M -26,-18 Q -15,-28 -6,-18" fill="none" stroke="#FBBF24" strokeWidth="3" />
+                              <path d="M 6,-18 Q 15,-28 26,-18" fill="none" stroke="#FBBF24" strokeWidth="3" />
+                              {/* Wide Open Eyes */}
+                              <circle cx="-15" cy="-4" r="6" fill="#FFFFFF" />
+                              <circle cx="15" cy="-4" r="6" fill="#FFFFFF" />
+                              <circle cx="-15" cy="-4" r="2.5" fill="#0F172A" />
+                              <circle cx="15" cy="-4" r="2.5" fill="#0F172A" />
+                              {/* Open 'O' Surprised Mouth */}
+                              <ellipse cx="0" cy="22" rx="10" ry="12" fill="#0F172A" stroke="#FBBF24" strokeWidth="3" />
+                            </g>
+                          )}
+                        </svg>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {card.choices.map((ch) => (
+                          <button
+                            key={ch}
+                            type="button"
+                            onClick={() => {
+                              const hit = ch === card.correctChoice;
+                              playToneSequence([hit ? 784 : 260], 0.06);
+                              adjustTier(hit, 800, 1200);
+                              setS4ShowHint(false);
+                              const nextHits = s4FaceObjHits + (hit ? 1 : 0);
+                              setS4FaceObjHits(nextHits);
+                              if (s4FaceObjIdx + 1 >= S4_FACE_OBJECT_CARDS.length) {
+                                setS4SubStage('FLUENCY');
+                              } else {
+                                setS4FaceObjIdx(s4FaceObjIdx + 1);
+                              }
+                            }}
+                            className="min-h-14 px-4 py-3 rounded-xl bg-slate-900 hover:bg-emerald-800 border-2 border-slate-700 text-white font-extrabold text-base cursor-pointer"
+                          >
+                            {ch}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+              {s4SubStage === 'FLUENCY' && (
                 <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 text-center space-y-5">
                   <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
-                    🎡 Spin 1 • Letter &ldquo;F&rdquo; Speed Word Wheel
+                    🎡 Part 2 of 3 • Letter &ldquo;F&rdquo; Speed Word Wheel
                   </div>
                   <p className="text-lg sm:text-xl font-bold text-white">
                     The Word Wheel landed on <strong>&ldquo;F&rdquo;</strong>! Say any words starting with <strong>F</strong> out loud and tap the gold chip for each word you say:
@@ -1980,18 +2447,20 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       }}
                       className="px-6 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-sm cursor-pointer"
                     >
-                      Done With Word Wheel &rarr; Play 3 Rounds of Table Telephone
+                      Done With Word Wheel &rarr; Part 3: Play 3 Rounds of Table Telephone
                     </button>
                   </div>
                 </div>
-              ) : (
+              )}
+
+              {s4SubStage === 'ECHO' &&
                 (() => {
                   const msg = S4_TELEPHONE_ROUNDS[s4EchoIdx] ?? S4_TELEPHONE_ROUNDS[0];
                   return (
                     <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 space-y-4">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-bold text-amber-300">
-                          Table Telephone Round {s4EchoIdx + 1} of {S4_TELEPHONE_ROUNDS.length}
+                          Part 3 of 3 • Table Telephone Round {s4EchoIdx + 1} of {S4_TELEPHONE_ROUNDS.length}
                         </span>
                         <button
                           type="button"
@@ -2038,7 +2507,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                 onUpdateStationTelemetry({
                                   'S4.1': {
                                     letterFValidCount: Math.max(
-                                      s4TapTimestamps.length * 3,
+                                      s4TapTimestamps.length * 3 + s4FaceObjHits,
                                       nextMissedLong ? 9 : 16
                                     ),
                                     letterFMedianIriMs: medianIri,
@@ -2064,8 +2533,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       </div>
                     </div>
                   );
-                })()
-              )}
+                })()}
             </div>
           )}
 
