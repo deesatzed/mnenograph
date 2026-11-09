@@ -46,6 +46,7 @@ export const App: React.FC = () => {
   const [spotlightLocked, setSpotlightLocked] = useState<boolean>(false);
   const [activeStation, setActiveStation] = useState<StationId>('S0.3');
   const [showResearcherHud, setShowResearcherHud] = useState<boolean>(true);
+  const [show3DMapInPatientView, setShow3DMapInPatientView] = useState<boolean>(false);
 
   const [session, setSession] = useState<SessionRecord>(() =>
     buildPresetSessionRecord('LIVE_PARTICIPANT', lockedManifest)
@@ -156,73 +157,46 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#070A12] text-slate-100 flex flex-col">
-      {/* Mandatory Non-Removable Intended-Use & Privacy Banner */}
+      {/* Subtle Top Regulatory & Mode Strip */}
       <div
         data-testid="intended-use-banner"
-        className="bg-slate-900 border-b border-slate-800 px-4 py-1.5 text-[11px] flex flex-wrap items-center justify-between gap-2"
+        className="bg-slate-950 border-b border-slate-800/80 px-4 py-1.5 text-[11px] flex flex-wrap items-center justify-between gap-2"
       >
         <div className="flex items-center gap-2">
-          <span className="px-2 py-0.5 rounded bg-sky-950 border border-sky-500/50 text-sky-300 font-bold uppercase">
+          <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300 font-semibold uppercase">
             RESEARCH &amp; EDUCATIONAL PROTOTYPE — NOT FOR CLINICAL DIAGNOSTIC USE
           </span>
-          <span className="text-slate-400">
-            100% Local Browser Execution • Zero External PHI Transmission
+          <span className="text-slate-500 hidden sm:inline">
+            Local Deterministic Execution • SHA-256: {computeManifestSha256(lockedManifest).slice(0, 10)}
           </span>
         </div>
-        <span className="text-slate-500 font-mono">
-          Manifest SHA-256: {computeManifestSha256(lockedManifest).slice(0, 12)}
-        </span>
-      </div>
 
-      {/* Persistent Global SIMULATED Watermark Header when a Synthetic Persona is loaded */}
-      {session.isSimulatedPreset && (
-        <div
-          data-testid="global-simulated-watermark"
-          className="bg-amber-500/20 border-b border-amber-400/60 px-4 py-2 text-center text-xs font-extrabold tracking-widest text-amber-200 uppercase"
-        >
-          {session.simulatedWatermark} — FOR GOOGLE SCIENCE &amp; RESEARCH DEMONSTRATION ONLY
-        </div>
-      )}
-
-      {/* Main Header with Primary Two-Mode Switcher (Patient Tour vs. Provider & Judge Portal) */}
-      <header className="max-w-7xl w-full mx-auto px-4 pt-4 pb-3 flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-white">
-            PostCircECD: <span className="text-sky-400">The Celestial Observatory</span>
-          </h1>
-          <p className="text-xs text-slate-300 mt-0.5">
-            {viewMode === 'PATIENT_TOUR'
-              ? '🌟 Patient Mode: Calm, game-like 6-Wing Observatory Tour (all clinical scores & telemetry hidden from view)'
-              : '🩺 Provider & Science Judge Portal: 6-Domain Clinical Results Report, Simulated Case Library & Psychometric Telemetry'}
-          </p>
-        </div>
-
-        {/* Primary 2-Mode Switcher Pills + Display Mode Toggle */}
+        {/* Discrete Mode Switcher for Clinician / Judge vs. Patient */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-xl bg-slate-900 p-1 border border-slate-700">
+          <div className="inline-flex rounded-lg bg-slate-900 p-0.5 border border-slate-700">
             <button
               type="button"
               data-testid="switch-to-patient-tour-btn"
               onClick={() => setViewMode('PATIENT_TOUR')}
-              className={`px-4 py-2 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+              className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
                 viewMode === 'PATIENT_TOUR'
-                  ? 'bg-sky-600 text-white shadow-sm'
-                  : 'text-slate-300 hover:text-white'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
-              🌟 1. Patient Observatory Tour (Game)
+              1. Patient Assessment View
             </button>
             <button
               type="button"
               data-testid="switch-to-provider-portal-btn"
               onClick={() => setViewMode('PROVIDER_PORTAL')}
-              className={`px-4 py-2 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+              className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
                 viewMode === 'PROVIDER_PORTAL'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-300 hover:text-white'
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
-              🩺 2. Provider &amp; Judge Results Portal
+              2. Provider &amp; Judge Results Portal
             </button>
           </div>
 
@@ -230,35 +204,43 @@ export const App: React.FC = () => {
             type="button"
             data-testid="toggle-presentation-mode-btn"
             onClick={handleTogglePresentationMode}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-              singleTrialMode === 'PLAIN_STATIC_2D'
-                ? 'bg-emerald-950/90 border-emerald-400 text-emerald-200'
-                : 'bg-sky-950/90 border-sky-400 text-sky-200'
-            }`}
+            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-semibold text-slate-300 cursor-pointer"
           >
-            {singleTrialMode === 'PLAIN_STATIC_2D'
-              ? 'Display: Plain Static 2D (Switch to 3D)'
-              : 'Display: 3D Observatory (Switch to Static 2D)'}
+            {singleTrialMode === 'PLAIN_STATIC_2D' ? 'Mode: Static 2D' : 'Mode: 3D Spotlight'}
           </button>
         </div>
-      </header>
+      </div>
+
+      {/* Persistent Global SIMULATED Watermark Header when a Synthetic Persona is loaded */}
+      {session.isSimulatedPreset && (
+        <div
+          data-testid="global-simulated-watermark"
+          className="bg-amber-500/20 border-b border-amber-400/60 px-4 py-1.5 text-center text-xs font-extrabold tracking-widest text-amber-200 uppercase"
+        >
+          {session.simulatedWatermark} — FOR GOOGLE SCIENCE &amp; RESEARCH DEMONSTRATION ONLY
+        </div>
+      )}
 
       {/* Main Content Container */}
-      <main className="max-w-7xl w-full mx-auto px-4 py-4 space-y-5 flex-1">
+      <main className="max-w-5xl w-full mx-auto px-4 py-6 flex-1 flex flex-col justify-center">
         {/* =====================================================================
-            VIEW 1: PATIENT OBSERVATORY TOUR (Calm, Game-Like, Zero Clinical Noise)
+            VIEW 1: SINGLE-FOCUS FULL-PAGE PATIENT EXPERIENCE
+            (1 Page for Instruction + Safe Demo -> 1 Page for Adaptive Test)
            ===================================================================== */}
-        <div className={viewMode === 'PATIENT_TOUR' ? 'space-y-5' : 'hidden'}>
-          {/* 3D Celestial Observatory Ring */}
-          <CelestialObservatory3D
-            activeStation={activeStation}
-            presentationMode={singleTrialMode}
-            spotlightLocked={spotlightLocked}
-            isSimulatedPreset={session.isSimulatedPreset}
-            onSelectStation={(st) => setActiveStation(st)}
-          />
+        <div className={viewMode === 'PATIENT_TOUR' ? 'space-y-4' : 'hidden'}>
+          {/* 3D Observatory Map is kept hidden during active patient testing to prevent visual crowding,
+              with an optional discrete toggle if the user wants to peek at the 3D orbital ring */}
+          <div className={show3DMapInPatientView ? 'block' : 'hidden'}>
+            <CelestialObservatory3D
+              activeStation={activeStation}
+              presentationMode={singleTrialMode}
+              spotlightLocked={spotlightLocked}
+              isSimulatedPreset={session.isSimulatedPreset}
+              onSelectStation={(st) => setActiveStation(st)}
+            />
+          </div>
 
-          {/* Interactive Stargazer Game Surface (Zero Number Inputs, Zero Medical Jargon) */}
+          {/* Full-Page Single-Task Adaptive Patient Interface */}
           <StationTasksInteractive
             activeStation={activeStation}
             presentationMode={singleTrialMode}
@@ -272,6 +254,8 @@ export const App: React.FC = () => {
             onSetSpotlightLocked={setSpotlightLocked}
             onSelectStation={setActiveStation}
             onFinishAssessment={() => setViewMode('PROVIDER_PORTAL')}
+            show3DMap={show3DMapInPatientView}
+            onToggle3DMap={() => setShow3DMapInPatientView((v) => !v)}
           />
         </div>
 
@@ -279,14 +263,13 @@ export const App: React.FC = () => {
             VIEW 2: PROVIDER & SCIENCE JUDGE PORTAL (Results Report, Cases & HUD)
            ===================================================================== */}
         <div className={viewMode === 'PROVIDER_PORTAL' ? 'space-y-5' : 'hidden'}>
-          {/* Provider Case Selector & Quick Actions Bar */}
-          <div className="rounded-2xl bg-slate-900/90 border border-emerald-500/40 p-4 flex flex-wrap items-center justify-between gap-3 shadow-md">
+          <div className="rounded-2xl bg-slate-900/90 border border-emerald-500/40 p-5 flex flex-wrap items-center justify-between gap-4 shadow-md">
             <div className="space-y-1">
               <div className="text-xs font-bold uppercase tracking-wider text-emerald-400">
                 🩺 Provider &amp; Science Judge Case Selector
               </div>
               <p className="text-xs text-slate-300">
-                Inspect the live patient’s completed Observatory Tour or load one of the 4 pre-recorded synthetic clinical personas below:
+                Inspect the live participant’s completed session or select one of the 4 pre-recorded synthetic clinical personas:
               </p>
             </div>
 
@@ -311,7 +294,7 @@ export const App: React.FC = () => {
                 onClick={handleStartNewGuidedTest}
                 className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-sm cursor-pointer"
               >
-                + Launch New Patient Tour (Wing 0 &rarr; V)
+                + Launch New Patient Assessment
               </button>
 
               <button
@@ -325,13 +308,11 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Clinical Vignette / Persona Summary Banner */}
           <div className="rounded-xl bg-slate-900/70 border border-slate-800 px-4 py-3 text-xs text-slate-200">
             <strong className="text-sky-300">{activePersonaMeta.label}:</strong>{' '}
             {activePersonaMeta.clinicalVignette}
           </div>
 
-          {/* Plain-English 6-Domain Assessment Results Report */}
           <AssessmentResultsReport
             session={session}
             manifest={sandboxManifest}
@@ -344,7 +325,6 @@ export const App: React.FC = () => {
             showResearcherHud={showResearcherHud}
           />
 
-          {/* Advanced Researcher / Judge Telemetry HUD */}
           {showResearcherHud && (
             <ResearcherTelemetryHud
               session={session}
