@@ -34,8 +34,8 @@ export interface StationTasksInteractiveProps {
 }
 
 // ============================================================================
-// COLOR-BLIND SAFE PLAYING CARD HELPER (Never relies on red/black color alone:
-// always shows large Rank + Suit Symbol ♠ ♥ ♦ ♣ + written Suit Name)
+// COLOR-BLIND SAFE PLAYING CARD RENDERER
+// Shows Rank + Suit Symbol (♠ ♥ ♦ ♣) + Suit Word so color vision is never tested
 // ============================================================================
 type CardSuit = '♠' | '♥' | '♦' | '♣';
 
@@ -51,8 +51,6 @@ function renderPlayingCard(
 ) {
   const size = opts?.size ?? 'md';
   const highlighted = opts?.highlighted ?? false;
-  // Color-blind safe contrast: Dark Navy (#0F172A) for Spades/Clubs, Deep Amber-Crimson (#B45309) for Hearts/Diamonds,
-  // plus explicit suit symbol and text label so color vision is never tested.
   const isWarmSuit = card.suit === '♥' || card.suit === '♦';
   const inkClass = isWarmSuit ? 'text-amber-700' : 'text-slate-900';
 
@@ -60,12 +58,12 @@ function renderPlayingCard(
     size === 'lg'
       ? 'w-28 h-38 p-2.5 rounded-2xl'
       : size === 'sm'
-      ? 'w-16 h-22 p-1.5 rounded-xl'
+      ? 'w-16 h-24 p-1.5 rounded-xl'
       : 'w-22 h-30 p-2 rounded-xl';
 
   return (
     <div
-      className={`inline-flex flex-col justify-between bg-amber-50 border-2 select-none shadow-md ${dims} ${
+      className={`inline-flex flex-col justify-between bg-amber-50 border-2 select-none shadow-md transition-transform ${dims} ${
         highlighted
           ? 'border-amber-400 ring-4 ring-amber-400/50 scale-105'
           : 'border-slate-300'
@@ -83,9 +81,7 @@ function renderPlayingCard(
           {card.suitName}
         </div>
       </div>
-      <div
-        className={`flex items-center justify-between font-extrabold leading-none ${inkClass}`}
-      >
+      <div className={`flex items-center justify-between font-extrabold leading-none ${inkClass}`}>
         <span className={size === 'sm' ? 'text-xs' : 'text-sm'}>{card.suit}</span>
         <span className={size === 'sm' ? 'text-xs' : 'text-sm'}>{card.rank}</span>
       </div>
@@ -94,526 +90,481 @@ function renderPlayingCard(
 }
 
 // ============================================================================
-// GAME 1 (S0.3 Surrogate): FOUR-CORNER CARD DEAL (10 Deals)
-// Deals 1–4: Single card dealt to 1 of 4 corners (records un-confounded motor reach RT).
-// Deals 5–10: Competing cards dealt simultaneously + Suit/Rank switches & faster tempo.
+// NON-COUNTING DYNAMIC HOURGLASS BAR (Flows smoothly without stressful numbers;
+// speeds up on streaks and slows down gently if a player needs more time)
 // ============================================================================
-const S03_CARD_DEALS: {
-  dealNum: number;
-  roundLabel: string;
-  dealerPrompt: string;
-  targetQuad: 'Q1' | 'Q2' | 'Q3' | 'Q4';
-  tempoWindowMs: number;
-  corners: Record<'Q1' | 'Q2' | 'Q3' | 'Q4', { card: CardSpec | null; isTarget: boolean }>;
-}[] = [
-  {
-    dealNum: 1,
-    roundLabel: 'Warm-Up Deal 1 of 10',
-    dealerPrompt: 'Tap the corner where the A♠ Ace of Spades is dealt',
-    targetQuad: 'Q3',
-    tempoWindowMs: 3500,
-    corners: {
-      Q2: { card: null, isTarget: false },
-      Q1: { card: null, isTarget: false },
-      Q3: { card: { rank: 'A', suit: '♠', suitName: 'Spades' }, isTarget: true },
-      Q4: { card: null, isTarget: false }
-    }
-  },
-  {
-    dealNum: 2,
-    roundLabel: 'Warm-Up Deal 2 of 10',
-    dealerPrompt: 'Tap the corner where the A♠ Ace of Spades is dealt',
-    targetQuad: 'Q1',
-    tempoWindowMs: 3200,
-    corners: {
-      Q2: { card: null, isTarget: false },
-      Q1: { card: { rank: 'A', suit: '♠', suitName: 'Spades' }, isTarget: true },
-      Q3: { card: null, isTarget: false },
-      Q4: { card: null, isTarget: false }
-    }
-  },
-  {
-    dealNum: 3,
-    roundLabel: 'Warm-Up Deal 3 of 10',
-    dealerPrompt: 'Tap the corner where the A♠ Ace of Spades is dealt',
-    targetQuad: 'Q4',
-    tempoWindowMs: 3000,
-    corners: {
-      Q2: { card: null, isTarget: false },
-      Q1: { card: null, isTarget: false },
-      Q3: { card: null, isTarget: false },
-      Q4: { card: { rank: 'A', suit: '♠', suitName: 'Spades' }, isTarget: true }
-    }
-  },
-  {
-    dealNum: 4,
-    roundLabel: 'Warm-Up Deal 4 of 10',
-    dealerPrompt: 'Tap the corner where the A♠ Ace of Spades is dealt',
-    targetQuad: 'Q2',
-    tempoWindowMs: 2800,
-    corners: {
-      Q2: { card: { rank: 'A', suit: '♠', suitName: 'Spades' }, isTarget: true },
-      Q1: { card: null, isTarget: false },
-      Q3: { card: null, isTarget: false },
-      Q4: { card: null, isTarget: false }
-    }
-  },
-  {
-    dealNum: 5,
-    roundLabel: 'Deal 5 of 10 • Ignore the Decoy Card',
-    dealerPrompt: 'Tap ONLY the A♠ Ace of Spades (Ignore the 4♦ Diamond)',
-    targetQuad: 'Q4',
-    tempoWindowMs: 2400,
-    corners: {
-      Q2: { card: { rank: '4', suit: '♦', suitName: 'Diamonds' }, isTarget: false },
-      Q1: { card: null, isTarget: false },
-      Q3: { card: null, isTarget: false },
-      Q4: { card: { rank: 'A', suit: '♠', suitName: 'Spades' }, isTarget: true }
-    }
-  },
-  {
-    dealNum: 6,
-    roundLabel: 'Deal 6 of 10 • New Target Card!',
-    dealerPrompt: 'NEW CARD: Tap ONLY the K♦ King of Diamonds',
-    targetQuad: 'Q3',
-    tempoWindowMs: 2200,
-    corners: {
-      Q2: { card: { rank: 'A', suit: '♠', suitName: 'Spades' }, isTarget: false },
-      Q1: { card: { rank: '8', suit: '♣', suitName: 'Clubs' }, isTarget: false },
-      Q3: { card: { rank: 'K', suit: '♦', suitName: 'Diamonds' }, isTarget: true },
-      Q4: { card: null, isTarget: false }
-    }
-  },
-  {
-    dealNum: 7,
-    roundLabel: 'Deal 7 of 10 • Full 4-Corner Deal',
-    dealerPrompt: 'Tap ONLY the 10♣ Ten of Clubs',
-    targetQuad: 'Q1',
-    tempoWindowMs: 2000,
-    corners: {
-      Q2: { card: { rank: 'K', suit: '♦', suitName: 'Diamonds' }, isTarget: false },
-      Q1: { card: { rank: '10', suit: '♣', suitName: 'Clubs' }, isTarget: true },
-      Q3: { card: { rank: '10', suit: '♥', suitName: 'Hearts' }, isTarget: false },
-      Q4: { card: { rank: '3', suit: '♠', suitName: 'Spades' }, isTarget: false }
-    }
-  },
-  {
-    dealNum: 8,
-    roundLabel: 'Deal 8 of 10 • Same-Number Suit Match',
-    dealerPrompt: 'Tap ONLY the 7♠ Seven of Spades (Careful of other 7s!)',
-    targetQuad: 'Q2',
-    tempoWindowMs: 1850,
-    corners: {
-      Q2: { card: { rank: '7', suit: '♠', suitName: 'Spades' }, isTarget: true },
-      Q1: { card: { rank: '7', suit: '♦', suitName: 'Diamonds' }, isTarget: false },
-      Q3: { card: { rank: '7', suit: '♥', suitName: 'Hearts' }, isTarget: false },
-      Q4: { card: { rank: 'Q', suit: '♠', suitName: 'Spades' }, isTarget: false }
-    }
-  },
-  {
-    dealNum: 9,
-    roundLabel: 'Deal 9 of 10 • Fast Suit Switch',
-    dealerPrompt: 'Tap ONLY the Q♥ Queen of Hearts',
-    targetQuad: 'Q3',
-    tempoWindowMs: 1700,
-    corners: {
-      Q2: { card: { rank: 'Q', suit: '♠', suitName: 'Spades' }, isTarget: false },
-      Q1: { card: { rank: 'Q', suit: '♣', suitName: 'Clubs' }, isTarget: false },
-      Q3: { card: { rank: 'Q', suit: '♥', suitName: 'Hearts' }, isTarget: true },
-      Q4: { card: { rank: 'J', suit: '♥', suitName: 'Hearts' }, isTarget: false }
-    }
-  },
-  {
-    dealNum: 10,
-    roundLabel: 'Deal 10 of 10 • Final Speed Deal',
-    dealerPrompt: 'Tap ONLY the 9♦ Nine of Diamonds',
-    targetQuad: 'Q1',
-    tempoWindowMs: 1550,
-    corners: {
-      Q2: { card: { rank: '9', suit: '♠', suitName: 'Spades' }, isTarget: false },
-      Q1: { card: { rank: '9', suit: '♦', suitName: 'Diamonds' }, isTarget: true },
-      Q3: { card: { rank: '6', suit: '♦', suitName: 'Diamonds' }, isTarget: false },
-      Q4: { card: { rank: '9', suit: '♣', suitName: 'Clubs' }, isTarget: false }
-    }
-  }
-];
+const DynamicHourglassBar: React.FC<{
+  stepKey: string | number;
+  durationMs: number;
+  paused: boolean;
+}> = ({ stepKey, durationMs, paused }) => {
+  const [fillPct, setFillPct] = useState<number>(100);
 
-// ============================================================================
-// GAME 2 (S1.1 / S1.3 Surrogate): SOLITAIRE TABLE SPOTTER (8 Deals)
-// Replaces ambiguous dot shapes with real Playing Cards:
-// - Measures Uncrowded vs. Tightly Crowded Center Card identification (PCA crowding)
-// - Measures Suit (Global Icon) vs. Corner Number (Local Detail) switching
-// - Measures Side-by-Side 4-Card & 5-Card Poker Hand difference spotting
-// ============================================================================
-type S1DealLayout =
-  | { kind: 'SINGLE_CARD'; center: CardSpec }
-  | { kind: 'ROW_CROWDED'; center: CardSpec; neighbors: CardSpec[] }
-  | { kind: 'GRID_3X3_CROWDED'; grid: CardSpec[] } // index 4 is center
-  | { kind: 'TWO_HANDS'; leftHand: CardSpec[]; rightHand: CardSpec[] };
+  useEffect(() => {
+    setFillPct(100);
+    if (paused) return;
+    const start = performance.now();
+    const id = window.setInterval(() => {
+      const elapsed = performance.now() - start;
+      // Floors gently at 12% so the player never feels "timed out" or punished
+      const remaining = Math.max(12, 100 - (elapsed / durationMs) * 88);
+      setFillPct(remaining);
+    }, 60);
+    return () => window.clearInterval(id);
+  }, [stepKey, durationMs, paused]);
 
-const S1_SOLITAIRE_DEALS: {
-  tier: number;
-  rule: 'GLOBAL_MACRO' | 'LOCAL_MICRO' | 'MATRIX_DIFF';
-  questionBadge: string;
-  prompt: string;
-  layout: S1DealLayout;
-  correctChoice: string;
-  choices: string[];
-}[] = [
-  {
-    tier: 1,
-    rule: 'GLOBAL_MACRO',
-    questionBadge: 'CARD SUIT',
-    prompt: 'What SUIT is this card?',
-    layout: {
-      kind: 'SINGLE_CARD',
-      center: { rank: 'A', suit: '♠', suitName: 'Spades' }
-    },
-    correctChoice: '♠ Spades',
-    choices: ['♠ Spades', '♥ Hearts', '♦ Diamonds', '♣ Clubs']
-  },
-  {
-    tier: 2,
-    rule: 'LOCAL_MICRO',
-    questionBadge: 'CARD NUMBER',
-    prompt: 'What NUMBER is printed on this card?',
-    layout: {
-      kind: 'SINGLE_CARD',
-      center: { rank: '8', suit: '♦', suitName: 'Diamonds' }
-    },
-    correctChoice: 'Number 8',
-    choices: ['Number 8', 'Number 3', 'Number 6', 'Number 9']
-  },
-  {
-    tier: 3,
-    rule: 'GLOBAL_MACRO',
-    questionBadge: 'CENTER CARD SUIT (IGNORE SIDE CARDS)',
-    prompt: 'Look ONLY at the GOLD-OUTLINED card in the middle: What SUIT is it?',
-    layout: {
-      kind: 'ROW_CROWDED',
-      center: { rank: 'Q', suit: '♣', suitName: 'Clubs' },
-      neighbors: [
-        { rank: '4', suit: '♠', suitName: 'Spades' },
-        { rank: '9', suit: '♦', suitName: 'Diamonds' },
-        { rank: '2', suit: '♥', suitName: 'Hearts' },
-        { rank: '7', suit: '♠', suitName: 'Spades' }
-      ]
-    },
-    correctChoice: '♣ Clubs',
-    choices: ['♣ Clubs', '♠ Spades', '♦ Diamonds', '♥ Hearts']
-  },
-  {
-    tier: 3,
-    rule: 'LOCAL_MICRO',
-    questionBadge: 'CENTER CARD NUMBER (IGNORE SIDE CARDS)',
-    prompt: 'Look ONLY at the GOLD-OUTLINED card in the middle: What NUMBER is on it?',
-    layout: {
-      kind: 'ROW_CROWDED',
-      center: { rank: '6', suit: '♥', suitName: 'Hearts' },
-      neighbors: [
-        { rank: '3', suit: '♣', suitName: 'Clubs' },
-        { rank: '9', suit: '♠', suitName: 'Spades' },
-        { rank: '2', suit: '♦', suitName: 'Diamonds' },
-        { rank: '8', suit: '♣', suitName: 'Clubs' }
-      ]
-    },
-    correctChoice: 'Number 6',
-    choices: ['Number 6', 'Number 3', 'Number 9', 'Number 8']
-  },
-  {
-    tier: 4,
-    rule: 'MATRIX_DIFF',
-    questionBadge: 'SPOT THE CHANGED CARD',
-    prompt: 'Compare Hand A and Hand B: Which card position changed in Hand B?',
-    layout: {
-      kind: 'TWO_HANDS',
-      leftHand: [
-        { rank: '2', suit: '♠', suitName: 'Spades' },
-        { rank: '5', suit: '♥', suitName: 'Hearts' },
-        { rank: '9', suit: '♣', suitName: 'Clubs' },
-        { rank: 'K', suit: '♦', suitName: 'Diamonds' }
-      ],
-      rightHand: [
-        { rank: '2', suit: '♠', suitName: 'Spades' },
-        { rank: '5', suit: '♥', suitName: 'Hearts' },
-        { rank: '4', suit: '♣', suitName: 'Clubs' },
-        { rank: 'K', suit: '♦', suitName: 'Diamonds' }
-      ]
-    },
-    correctChoice: 'Card #3 (9♣ changed to 4♣)',
-    choices: [
-      'Card #1',
-      'Card #2',
-      'Card #3 (9♣ changed to 4♣)',
-      'Card #4'
-    ]
-  },
-  {
-    tier: 4,
-    rule: 'GLOBAL_MACRO',
-    questionBadge: 'CROWDED TABLE • CENTER CARD SUIT',
-    prompt: 'Look at the GOLD-OUTLINED card in the exact center of the 9 cards: What SUIT is it?',
-    layout: {
-      kind: 'GRID_3X3_CROWDED',
-      grid: [
-        { rank: '3', suit: '♠', suitName: 'Spades' },
-        { rank: '8', suit: '♣', suitName: 'Clubs' },
-        { rank: '5', suit: '♥', suitName: 'Hearts' },
-        { rank: '10', suit: '♣', suitName: 'Clubs' },
-        { rank: 'J', suit: '♦', suitName: 'Diamonds' }, // center card
-        { rank: '2', suit: '♠', suitName: 'Spades' },
-        { rank: '7', suit: '♥', suitName: 'Hearts' },
-        { rank: '4', suit: '♠', suitName: 'Spades' },
-        { rank: '9', suit: '♣', suitName: 'Clubs' }
-      ]
-    },
-    correctChoice: '♦ Diamonds',
-    choices: ['♦ Diamonds', '♠ Spades', '♣ Clubs', '♥ Hearts']
-  },
-  {
-    tier: 5,
-    rule: 'LOCAL_MICRO',
-    questionBadge: 'CROWDED TABLE • CENTER CARD NUMBER',
-    prompt: 'Look at the GOLD-OUTLINED card in the exact center of the 9 cards: What NUMBER is on it?',
-    layout: {
-      kind: 'GRID_3X3_CROWDED',
-      grid: [
-        { rank: '4', suit: '♦', suitName: 'Diamonds' },
-        { rank: '7', suit: '♥', suitName: 'Hearts' },
-        { rank: '2', suit: '♣', suitName: 'Clubs' },
-        { rank: '6', suit: '♦', suitName: 'Diamonds' },
-        { rank: '9', suit: '♠', suitName: 'Spades' }, // center card
-        { rank: '3', suit: '♥', suitName: 'Hearts' },
-        { rank: '8', suit: '♣', suitName: 'Clubs' },
-        { rank: '5', suit: '♦', suitName: 'Diamonds' },
-        { rank: '4', suit: '♥', suitName: 'Hearts' }
-      ]
-    },
-    correctChoice: 'Number 9',
-    choices: ['Number 9', 'Number 6', 'Number 7', 'Number 4']
-  },
-  {
-    tier: 5,
-    rule: 'MATRIX_DIFF',
-    questionBadge: 'SPOT THE SWAPPED CARDS',
-    prompt: 'Compare Hand A and Hand B: Which two neighboring cards were swapped in Hand B?',
-    layout: {
-      kind: 'TWO_HANDS',
-      leftHand: [
-        { rank: '3', suit: '♠', suitName: 'Spades' },
-        { rank: '7', suit: '♦', suitName: 'Diamonds' },
-        { rank: '10', suit: '♣', suitName: 'Clubs' },
-        { rank: 'Q', suit: '♥', suitName: 'Hearts' },
-        { rank: 'A', suit: '♠', suitName: 'Spades' }
-      ],
-      rightHand: [
-        { rank: '3', suit: '♠', suitName: 'Spades' },
-        { rank: '10', suit: '♣', suitName: 'Clubs' },
-        { rank: '7', suit: '♦', suitName: 'Diamonds' },
-        { rank: 'Q', suit: '♥', suitName: 'Hearts' },
-        { rank: 'A', suit: '♠', suitName: 'Spades' }
-      ]
-    },
-    correctChoice: 'Cards #2 & #3 (7♦ and 10♣ swapped)',
-    choices: [
-      'Cards #1 & #2',
-      'Cards #2 & #3 (7♦ and 10♣ swapped)',
-      'Cards #3 & #4',
-      'Cards #4 & #5'
-    ]
-  }
-];
-
-function renderS1SolitaireTable(layout: S1DealLayout) {
-  if (layout.kind === 'SINGLE_CARD') {
-    return (
-      <div className="py-4 flex justify-center">
-        {renderPlayingCard(layout.center, { size: 'lg', highlighted: true })}
-      </div>
-    );
-  }
-
-  if (layout.kind === 'ROW_CROWDED') {
-    return (
-      <div className="py-4 flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
-        {renderPlayingCard(layout.neighbors[0], { size: 'sm' })}
-        {renderPlayingCard(layout.neighbors[1], { size: 'sm' })}
-        {renderPlayingCard(layout.center, { size: 'md', highlighted: true })}
-        {renderPlayingCard(layout.neighbors[2], { size: 'sm' })}
-        {renderPlayingCard(layout.neighbors[3], { size: 'sm' })}
-      </div>
-    );
-  }
-
-  if (layout.kind === 'GRID_3X3_CROWDED') {
-    return (
-      <div className="py-3 grid grid-cols-3 gap-2 max-w-xs mx-auto place-items-center">
-        {layout.grid.map((c, idx) => (
-          <div key={idx}>
-            {renderPlayingCard(c, { size: 'sm', highlighted: idx === 4 })}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // TWO_HANDS comparison
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2">
-      {[
-        { title: 'HAND A (Left)', cards: layout.leftHand },
-        { title: 'HAND B (Right)', cards: layout.rightHand }
-      ].map((hand) => (
+    <div className="flex items-center gap-2.5 w-full max-w-xs" aria-label="Dynamic hourglass pace bar">
+      <span className="text-base select-none" aria-hidden="true">
+        ⏳
+      </span>
+      <div className="flex-1 h-2.5 rounded-full bg-slate-800 overflow-hidden border border-slate-700">
         <div
-          key={hand.title}
-          className="rounded-xl bg-emerald-950/40 border border-emerald-500/30 p-3 space-y-2"
-        >
-          <div className="text-xs font-extrabold uppercase tracking-wider text-emerald-300">
-            {hand.title}
-          </div>
-          <div className="flex flex-wrap justify-center gap-1.5">
-            {hand.cards.map((c, idx) => (
-              <div key={idx} className="flex flex-col items-center gap-1">
-                <span className="text-[11px] font-bold text-slate-300">#{idx + 1}</span>
-                {renderPlayingCard(c, { size: 'sm' })}
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
+          className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-300 to-amber-500 transition-all duration-75"
+          style={{ width: `${fillPct}%` }}
+        />
+      </div>
     </div>
   );
-}
+};
 
 // ============================================================================
-// GAME 3 (S2.1 / S2.2 Surrogate): HARBOR MIST WINDOW (6 Views)
-// Uses clear everyday silhouettes (Sailing Ship, Anchor, Flying Bird) vs.
-// Empty Drifting Clouds (measures pareidolia false positives & contrast threshold)
+// GAME 1 (S0.3 Surrogate): MODERN 4-CORNER PONG / STAR-DEFLECTOR ARCADE
+// Rounds 1–4: Single glowing Gold Orb bounces into 1 of the 4 corner paddles (pure RT_motor).
+// Rounds 5–10: Multi-Ball Speed Rally! Deflect ONLY the Target Orb while ignoring Decoy Asteroids.
 // ============================================================================
-const S2_MIST_VIEWS: {
+const S03_PONG_RALLIES: {
+  rallyNum: number;
+  rallyBadge: string;
+  callBanner: string;
+  targetQuad: 'Q1' | 'Q2' | 'Q3' | 'Q4';
+  hourglassMs: number;
+  paddles: Record<
+    'Q1' | 'Q2' | 'Q3' | 'Q4',
+    { orbType: 'GOLD_STAR' | 'DIAMOND_BOLT' | 'SHIELD_ORB' | 'DECOY_ROCK' | 'EMPTY'; label: string; isTarget: boolean }
+  >;
+}[] = [
+  {
+    rallyNum: 1,
+    rallyBadge: 'Warm-Up Rally 1 of 10',
+    callBanner: 'Bounce the ★ GOLD ORB!',
+    targetQuad: 'Q3',
+    hourglassMs: 4200,
+    paddles: {
+      Q2: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q1: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q3: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: true },
+      Q4: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 2,
+    rallyBadge: 'Warm-Up Rally 2 of 10',
+    callBanner: 'Bounce the ★ GOLD ORB!',
+    targetQuad: 'Q1',
+    hourglassMs: 3900,
+    paddles: {
+      Q2: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q1: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: true },
+      Q3: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q4: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 3,
+    rallyBadge: 'Warm-Up Rally 3 of 10',
+    callBanner: 'Bounce the ★ GOLD ORB!',
+    targetQuad: 'Q4',
+    hourglassMs: 3600,
+    paddles: {
+      Q2: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q1: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q3: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q4: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: true }
+    }
+  },
+  {
+    rallyNum: 4,
+    rallyBadge: 'Warm-Up Rally 4 of 10',
+    callBanner: 'Bounce the ★ GOLD ORB!',
+    targetQuad: 'Q2',
+    hourglassMs: 3400,
+    paddles: {
+      Q2: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: true },
+      Q1: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q3: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q4: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 5,
+    rallyBadge: 'Speed Rally 5 of 10 • Dodge the Gray Asteroid!',
+    callBanner: 'Bounce ONLY the ★ GOLD ORB (Ignore the 🪨 Gray Rock!)',
+    targetQuad: 'Q4',
+    hourglassMs: 3000,
+    paddles: {
+      Q2: { orbType: 'DECOY_ROCK', label: '🪨 GRAY ROCK (IGNORE)', isTarget: false },
+      Q1: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q3: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false },
+      Q4: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: true }
+    }
+  },
+  {
+    rallyNum: 6,
+    rallyBadge: 'Speed Rally 6 of 10 • Bonus Target Switch!',
+    callBanner: 'NEW TARGET: Bounce the ◆ DIAMOND COMET!',
+    targetQuad: 'Q3',
+    hourglassMs: 2700,
+    paddles: {
+      Q2: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: false },
+      Q1: { orbType: 'DECOY_ROCK', label: '🪨 GRAY ROCK', isTarget: false },
+      Q3: { orbType: 'DIAMOND_BOLT', label: '◆ DIAMOND COMET', isTarget: true },
+      Q4: { orbType: 'EMPTY', label: 'Open Corner', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 7,
+    rallyBadge: 'Speed Rally 7 of 10 • Multi-Ball Arcade!',
+    callBanner: 'Bounce ONLY the 🛡️ SHIELD ORB!',
+    targetQuad: 'Q1',
+    hourglassMs: 2500,
+    paddles: {
+      Q2: { orbType: 'DIAMOND_BOLT', label: '◆ DIAMOND COMET', isTarget: false },
+      Q1: { orbType: 'SHIELD_ORB', label: '🛡️ SHIELD ORB', isTarget: true },
+      Q3: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: false },
+      Q4: { orbType: 'DECOY_ROCK', label: '🪨 GRAY ROCK', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 8,
+    rallyBadge: 'Speed Rally 8 of 10 • Fast Switch!',
+    callBanner: 'BACK TO GOLD: Bounce ONLY the ★ GOLD ORB!',
+    targetQuad: 'Q2',
+    hourglassMs: 2300,
+    paddles: {
+      Q2: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: true },
+      Q1: { orbType: 'SHIELD_ORB', label: '🛡️ SHIELD ORB', isTarget: false },
+      Q3: { orbType: 'DIAMOND_BOLT', label: '◆ DIAMOND COMET', isTarget: false },
+      Q4: { orbType: 'DECOY_ROCK', label: '🪨 GRAY ROCK', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 9,
+    rallyBadge: 'Speed Rally 9 of 10 • Double Decoys!',
+    callBanner: 'Bounce ONLY the ◆ DIAMOND COMET!',
+    targetQuad: 'Q3',
+    hourglassMs: 2100,
+    paddles: {
+      Q2: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: false },
+      Q1: { orbType: 'SHIELD_ORB', label: '🛡️ SHIELD ORB', isTarget: false },
+      Q3: { orbType: 'DIAMOND_BOLT', label: '◆ DIAMOND COMET', isTarget: true },
+      Q4: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: false }
+    }
+  },
+  {
+    rallyNum: 10,
+    rallyBadge: 'Final Rally 10 of 10 • Grand Finale!',
+    callBanner: 'FINAL SHOT: Bounce the 🛡️ SHIELD ORB!',
+    targetQuad: 'Q1',
+    hourglassMs: 1900,
+    paddles: {
+      Q2: { orbType: 'DIAMOND_BOLT', label: '◆ DIAMOND COMET', isTarget: false },
+      Q1: { orbType: 'SHIELD_ORB', label: '🛡️ SHIELD ORB', isTarget: true },
+      Q3: { orbType: 'GOLD_STAR', label: '★ GOLD ORB', isTarget: false },
+      Q4: { orbType: 'DIAMOND_BOLT', label: '◆ DIAMOND COMET', isTarget: false }
+    }
+  }
+];
+
+// ============================================================================
+// GAME 2 (S1 Surrogate): SPEED GO-FISH! (8 Hands)
+// Real Go-Fish gameplay! You hold a hand of cards (growing from 4 spaced cards
+// to 9 tightly fanned cards). The Dealer asks: "Do you have any 7s?"
+// You tap the matching card RIGHT IN YOUR HAND, or tap "🐟 GO FISH!" if you don't have it!
+// Secretly measures:
+// - Uncrowded 4-card hand vs. Tightly Crowded 8-9 card hand search time (PCA Visual Crowding!)
+// - Suit vs. Rank attention switching
+// ============================================================================
+const S1_GO_FISH_HANDS: {
+  handNum: number;
+  tier: number;
+  rule: 'GLOBAL_MACRO' | 'LOCAL_MICRO' | 'MATRIX_DIFF';
+  dealerAsk: string;
+  askDetail: string;
+  crowded: boolean;
+  playerHand: CardSpec[];
+  matchingCardIndex: number | null; // null means player does NOT have it -> correct move is "🐟 GO FISH!"
+}[] = [
+  {
+    handNum: 1,
+    tier: 1,
+    rule: 'LOCAL_MICRO',
+    dealerAsk: 'Dealer asks: "Do you have any 7s?"',
+    askDetail: 'Tap the 7 in your hand—or tap GO FISH if you don’t have one!',
+    crowded: false,
+    playerHand: [
+      { rank: '2', suit: '♣', suitName: 'Clubs' },
+      { rank: '7', suit: '♠', suitName: 'Spades' },
+      { rank: '10', suit: '♥', suitName: 'Hearts' },
+      { rank: 'K', suit: '♦', suitName: 'Diamonds' }
+    ],
+    matchingCardIndex: 1
+  },
+  {
+    handNum: 2,
+    tier: 1,
+    rule: 'GLOBAL_MACRO',
+    dealerAsk: 'Dealer asks: "Do you have any HEARTS (♥)?"',
+    askDetail: 'Tap the Heart card in your hand—or tap GO FISH!',
+    crowded: false,
+    playerHand: [
+      { rank: '4', suit: '♠', suitName: 'Spades' },
+      { rank: '9', suit: '♣', suitName: 'Clubs' },
+      { rank: 'Q', suit: '♥', suitName: 'Hearts' },
+      { rank: '6', suit: '♦', suitName: 'Diamonds' }
+    ],
+    matchingCardIndex: 2
+  },
+  {
+    handNum: 3,
+    tier: 2,
+    rule: 'LOCAL_MICRO',
+    dealerAsk: 'Dealer asks: "Do you have any KINGS (K)?"',
+    askDetail: 'Check your hand carefully—if you have no Kings, tap GO FISH!',
+    crowded: false,
+    playerHand: [
+      { rank: '3', suit: '♠', suitName: 'Spades' },
+      { rank: '8', suit: '♦', suitName: 'Diamonds' },
+      { rank: 'J', suit: '♣', suitName: 'Clubs' },
+      { rank: '5', suit: '♥', suitName: 'Hearts' },
+      { rank: '9', suit: '♠', suitName: 'Spades' }
+    ],
+    matchingCardIndex: null // Correct action is "🐟 GO FISH!"
+  },
+  {
+    handNum: 4,
+    tier: 3,
+    rule: 'LOCAL_MICRO',
+    dealerAsk: 'Dealer asks: "Do you have any 6s?"',
+    askDetail: 'Your hand is fuller now! Tap the 6 in your hand—or tap GO FISH!',
+    crowded: true,
+    playerHand: [
+      { rank: '9', suit: '♠', suitName: 'Spades' },
+      { rank: '3', suit: '♥', suitName: 'Hearts' },
+      { rank: '8', suit: '♣', suitName: 'Clubs' },
+      { rank: '6', suit: '♦', suitName: 'Diamonds' },
+      { rank: 'Q', suit: '♠', suitName: 'Spades' },
+      { rank: '2', suit: '♥', suitName: 'Hearts' },
+      { rank: '5', suit: '♣', suitName: 'Clubs' }
+    ],
+    matchingCardIndex: 3
+  },
+  {
+    handNum: 5,
+    tier: 3,
+    rule: 'GLOBAL_MACRO',
+    dealerAsk: 'Dealer asks: "Do you have any DIAMONDS (♦)?"',
+    askDetail: 'Look across your fanned hand for a Diamond (♦)—or tap GO FISH!',
+    crowded: true,
+    playerHand: [
+      { rank: '4', suit: '♠', suitName: 'Spades' },
+      { rank: '10', suit: '♣', suitName: 'Clubs' },
+      { rank: '7', suit: '♥', suitName: 'Hearts' },
+      { rank: 'K', suit: '♠', suitName: 'Spades' },
+      { rank: '9', suit: '♦', suitName: 'Diamonds' },
+      { rank: '2', suit: '♣', suitName: 'Clubs' },
+      { rank: 'J', suit: '♥', suitName: 'Hearts' }
+    ],
+    matchingCardIndex: 4
+  },
+  {
+    handNum: 6,
+    tier: 4,
+    rule: 'MATRIX_DIFF',
+    dealerAsk: 'Dealer asks: "Do you have any ACES (A)?"',
+    askDetail: 'Check your 8-card hand—tap the Ace or tap GO FISH!',
+    crowded: true,
+    playerHand: [
+      { rank: '8', suit: '♠', suitName: 'Spades' },
+      { rank: '4', suit: '♦', suitName: 'Diamonds' },
+      { rank: 'Q', suit: '♣', suitName: 'Clubs' },
+      { rank: '7', suit: '♥', suitName: 'Hearts' },
+      { rank: '3', suit: '♠', suitName: 'Spades' },
+      { rank: '10', suit: '♦', suitName: 'Diamonds' },
+      { rank: '6', suit: '♣', suitName: 'Clubs' },
+      { rank: 'K', suit: '♥', suitName: 'Hearts' }
+    ],
+    matchingCardIndex: null // Correct move is "🐟 GO FISH!"
+  },
+  {
+    handNum: 7,
+    tier: 5,
+    rule: 'LOCAL_MICRO',
+    dealerAsk: 'Dealer asks: "Do you have the 4♠ Four of Spades?"',
+    askDetail: 'Careful—there are several 4s! Tap ONLY the 4♠ Four of Spades!',
+    crowded: true,
+    playerHand: [
+      { rank: '4', suit: '♦', suitName: 'Diamonds' },
+      { rank: '9', suit: '♠', suitName: 'Spades' },
+      { rank: '4', suit: '♥', suitName: 'Hearts' },
+      { rank: '7', suit: '♣', suitName: 'Clubs' },
+      { rank: '4', suit: '♠', suitName: 'Spades' },
+      { rank: '4', suit: '♣', suitName: 'Clubs' },
+      { rank: 'J', suit: '♦', suitName: 'Diamonds' },
+      { rank: '2', suit: '♠', suitName: 'Spades' }
+    ],
+    matchingCardIndex: 4
+  },
+  {
+    handNum: 8,
+    tier: 5,
+    rule: 'MATRIX_DIFF',
+    dealerAsk: 'Bonus Pair Check: "Tap Either Card of Your Matching PAIR of 8s!"',
+    askDetail: 'Spot the two 8s hiding in your 8-card hand and tap either 8!',
+    crowded: true,
+    playerHand: [
+      { rank: '3', suit: '♠', suitName: 'Spades' },
+      { rank: '8', suit: '♥', suitName: 'Hearts' },
+      { rank: 'K', suit: '♣', suitName: 'Clubs' },
+      { rank: '5', suit: '♦', suitName: 'Diamonds' },
+      { rank: 'J', suit: '♠', suitName: 'Spades' },
+      { rank: '2', suit: '♣', suitName: 'Clubs' },
+      { rank: '9', suit: '♦', suitName: 'Diamonds' },
+      { rank: '8', suit: '♠', suitName: 'Spades' }
+    ],
+    matchingCardIndex: 1 // Index 1 or 7 (both have rank '8')
+  }
+];
+
+// ============================================================================
+// GAME 3 (S2.1 / S2.2 Surrogate): MYSTERY DECK DRAW (Foggy Card Table)
+// Draw a card from the Mystery Deck—tap the Emblem on the card, or tap
+// "🃏 Blank Joker Card (Nothing On It)" when the card is pure mist!
+// ============================================================================
+const S2_MYSTERY_CARDS: {
   id: number;
   tier: number;
-  mistLabel: string;
-  isPureMist: boolean;
+  drawLabel: string;
+  isBlankJoker: boolean;
   correctAnswer: string;
   mistOpacity: number;
-  silhouetteOpacity: number;
+  emblemOpacity: number;
   tiltDeg: number;
-  objectKind: 'ship' | 'empty_1' | 'anchor' | 'empty_2' | 'bird' | 'empty_3';
+  emblemKind: 'ship' | 'blank_1' | 'anchor' | 'blank_2' | 'bird' | 'blank_3';
   choices: string[];
 }[] = [
   {
     id: 1,
     tier: 1,
-    mistLabel: 'Window View 1 of 6 • Light Morning Mist',
-    isPureMist: false,
-    correctAnswer: '⛵ Sailing Ship',
-    mistOpacity: 0.35,
-    silhouetteOpacity: 0.85,
+    drawLabel: 'Mystery Card 1 of 6',
+    isBlankJoker: false,
+    correctAnswer: '⛵ Sailing Ship Card',
+    mistOpacity: 0.32,
+    emblemOpacity: 0.88,
     tiltDeg: 0,
-    objectKind: 'ship',
+    emblemKind: 'ship',
     choices: [
-      '⛵ Sailing Ship',
-      '⚓ Ship’s Anchor',
-      '🕊️ Flying Bird',
-      '👤 Person’s Face',
-      '☁️ Just Empty Clouds (Nothing There)'
+      '⛵ Sailing Ship Card',
+      '⚓ Lucky Anchor Card',
+      '🕊️ Flying Bird Card',
+      '👑 Royal Crown / Face Card',
+      '🃏 Blank Mist Card (Nothing On It)'
     ]
   },
   {
     id: 2,
     tier: 2,
-    mistLabel: 'Window View 2 of 6 • Drifting Clouds',
-    isPureMist: true,
-    correctAnswer: '☁️ Just Empty Clouds (Nothing There)',
-    mistOpacity: 0.75,
-    silhouetteOpacity: 0,
+    drawLabel: 'Mystery Card 2 of 6',
+    isBlankJoker: true,
+    correctAnswer: '🃏 Blank Mist Card (Nothing On It)',
+    mistOpacity: 0.76,
+    emblemOpacity: 0,
     tiltDeg: 0,
-    objectKind: 'empty_1',
+    emblemKind: 'blank_1',
     choices: [
-      '⛵ Sailing Ship',
-      '⚓ Ship’s Anchor',
-      '🕊️ Flying Bird',
-      '👤 Person’s Face',
-      '☁️ Just Empty Clouds (Nothing There)'
+      '⛵ Sailing Ship Card',
+      '⚓ Lucky Anchor Card',
+      '🕊️ Flying Bird Card',
+      '👑 Royal Crown / Face Card',
+      '🃏 Blank Mist Card (Nothing On It)'
     ]
   },
   {
     id: 3,
     tier: 3,
-    mistLabel: 'Window View 3 of 6 • Moderate Harbor Mist',
-    isPureMist: false,
-    correctAnswer: '⚓ Ship’s Anchor',
-    mistOpacity: 0.55,
-    silhouetteOpacity: 0.55,
-    tiltDeg: 28,
-    objectKind: 'anchor',
+    drawLabel: 'Mystery Card 3 of 6',
+    isBlankJoker: false,
+    correctAnswer: '⚓ Lucky Anchor Card',
+    mistOpacity: 0.54,
+    emblemOpacity: 0.56,
+    tiltDeg: 25,
+    emblemKind: 'anchor',
     choices: [
-      '⛵ Sailing Ship',
-      '⚓ Ship’s Anchor',
-      '🕊️ Flying Bird',
-      '👤 Person’s Face',
-      '☁️ Just Empty Clouds (Nothing There)'
+      '⛵ Sailing Ship Card',
+      '⚓ Lucky Anchor Card',
+      '🕊️ Flying Bird Card',
+      '👑 Royal Crown / Face Card',
+      '🃏 Blank Mist Card (Nothing On It)'
     ]
   },
   {
     id: 4,
     tier: 4,
-    mistLabel: 'Window View 4 of 6 • Thick Cloud Bank',
-    isPureMist: true,
-    correctAnswer: '☁️ Just Empty Clouds (Nothing There)',
+    drawLabel: 'Mystery Card 4 of 6',
+    isBlankJoker: true,
+    correctAnswer: '🃏 Blank Mist Card (Nothing On It)',
     mistOpacity: 0.85,
-    silhouetteOpacity: 0,
+    emblemOpacity: 0,
     tiltDeg: 0,
-    objectKind: 'empty_2',
+    emblemKind: 'blank_2',
     choices: [
-      '⛵ Sailing Ship',
-      '⚓ Ship’s Anchor',
-      '🕊️ Flying Bird',
-      '👤 Person’s Face',
-      '☁️ Just Empty Clouds (Nothing There)'
+      '⛵ Sailing Ship Card',
+      '⚓ Lucky Anchor Card',
+      '🕊️ Flying Bird Card',
+      '👑 Royal Crown / Face Card',
+      '🃏 Blank Mist Card (Nothing On It)'
     ]
   },
   {
     id: 5,
     tier: 5,
-    mistLabel: 'Window View 5 of 6 • Deep Twilight Fog',
-    isPureMist: false,
-    correctAnswer: '🕊️ Flying Bird',
-    mistOpacity: 0.78,
-    silhouetteOpacity: 0.36,
-    tiltDeg: 35,
-    objectKind: 'bird',
+    drawLabel: 'Mystery Card 5 of 6',
+    isBlankJoker: false,
+    correctAnswer: '🕊️ Flying Bird Card',
+    mistOpacity: 0.76,
+    emblemOpacity: 0.38,
+    tiltDeg: 32,
+    emblemKind: 'bird',
     choices: [
-      '⛵ Sailing Ship',
-      '⚓ Ship’s Anchor',
-      '🕊️ Flying Bird',
-      '👤 Person’s Face',
-      '☁️ Just Empty Clouds (Nothing There)'
+      '⛵ Sailing Ship Card',
+      '⚓ Lucky Anchor Card',
+      '🕊️ Flying Bird Card',
+      '👑 Royal Crown / Face Card',
+      '🃏 Blank Mist Card (Nothing On It)'
     ]
   },
   {
     id: 6,
     tier: 5,
-    mistLabel: 'Window View 6 of 6 • Final Fog Check',
-    isPureMist: true,
-    correctAnswer: '☁️ Just Empty Clouds (Nothing There)',
+    drawLabel: 'Mystery Card 6 of 6',
+    isBlankJoker: true,
+    correctAnswer: '🃏 Blank Mist Card (Nothing On It)',
     mistOpacity: 0.88,
-    silhouetteOpacity: 0,
+    emblemOpacity: 0,
     tiltDeg: 0,
-    objectKind: 'empty_3',
+    emblemKind: 'blank_3',
     choices: [
-      '⛵ Sailing Ship',
-      '⚓ Ship’s Anchor',
-      '🕊️ Flying Bird',
-      '👤 Person’s Face',
-      '☁️ Just Empty Clouds (Nothing There)'
+      '⛵ Sailing Ship Card',
+      '⚓ Lucky Anchor Card',
+      '🕊️ Flying Bird Card',
+      '👑 Royal Crown / Face Card',
+      '🃏 Blank Mist Card (Nothing On It)'
     ]
   }
 ];
 
 // ============================================================================
-// GAME 4 (S3.1 Surrogate): SUIT-OR-NUMBER CARD SORT
+// GAME 4 (S3.1 Surrogate): SPEED RUMMY / UNO DISCARD
 // ============================================================================
 const S31_SCHEDULE: ('repeat' | 'switch')[] = [
   'repeat', 'repeat', 'switch', 'repeat', 'repeat',
@@ -625,10 +576,9 @@ const S31_SCHEDULE: ('repeat' | 'switch')[] = [
 ];
 
 // ============================================================================
-// GAME 5 (S4 Surrogate): WORD CHAIN & TRAVEL RADIO MESSAGES
-// Everyday travel messages (short -> medium -> long)
+// GAME 5 (S4 Surrogate): WORD WHEEL & TABLE TELEPHONE
 // ============================================================================
-const S4_TRAVEL_MESSAGES: {
+const S4_TELEPHONE_ROUNDS: {
   id: number;
   tier: number;
   syllables: number;
@@ -639,99 +589,101 @@ const S4_TRAVEL_MESSAGES: {
     id: 1,
     tier: 1,
     syllables: 8,
-    target: 'The morning train leaves from Track Four.',
+    target: 'Deal five cards to every player.',
     options: [
-      'The morning train leaves from Track Four.',
-      'The evening train leaves from TrackFour.',
-      'The morning bus leaves from Gate Four.'
+      'Deal five cards to every player.',
+      'Deal four cards to every table.',
+      'Pass five chips to every player.'
     ]
   },
   {
     id: 2,
     tier: 3,
     syllables: 15,
-    target: 'The harbor ferry captain announced a twenty-minute delay due to fog.',
+    target: 'The lucky dealer drew two Aces and a Queen of Hearts from the deck.',
     options: [
-      'The harbor ferry captain announced a thirty-minute delay due to rain.',
-      'The harbor ferry captain announced a twenty-minute delay due to fog.',
-      'The island steamer captain announced a twenty-minute delay due to fog.'
+      'The lucky dealer drew two Kings and a Queen of Spades from the deck.',
+      'The lucky dealer drew two Aces and a Queen of Hearts from the deck.',
+      'The quiet player drew two Aces and a Jack of Hearts from the pile.'
     ]
   },
   {
     id: 3,
     tier: 5,
     syllables: 22,
-    target: 'The passenger who left the brown leather suitcase at the ticket counter returned before noon.',
+    target: 'The player who held the winning Rummy hand traded the Seven of Diamonds before the final turn.',
     options: [
-      'The passenger who left the brown canvas briefcase at the ticket counter returned before noon.',
-      'The conductor who found the brown leather suitcase at the station platform returned before noon.',
-      'The passenger who left the brown leather suitcase at the ticket counter returned before noon.'
+      'The player who held the winning Poker hand traded the Seven of Clubs before the final turn.',
+      'The dealer who shuffled the winning Rummy deck traded the Nine of Diamonds before the final turn.',
+      'The player who held the winning Rummy hand traded the Seven of Diamonds before the final turn.'
     ]
   }
 ];
 
 // ============================================================================
-// GAME 6 (S5 Surrogate): SUITCASE PACKING ORDER & FAMOUS TRIVIA HALL OF FAME
+// GAME 6 (S5 Surrogate): BLACKJACK 21 DEAL ORDER & "WHO HELD WHICH CARD?" RECALL
+// ZERO OUTSIDE TRIVIA OR KNOWLEDGE BASE TESTED!
+// All 3 players & their lucky cards are introduced right inside the game!
 // ============================================================================
-const SUITCASE_ITEMS = [
-  { id: 0, icon: '🛂', name: 'Passport' },
-  { id: 1, icon: '📷', name: 'Camera' },
-  { id: 2, icon: '🕶️', name: 'Sunglasses' },
-  { id: 3, icon: '🧭', name: 'Compass' },
-  { id: 4, icon: '🎟️', name: 'Train Ticket' },
-  { id: 5, icon: '🗺️', name: 'Folding Map' }
+const DEAL_ORDER_CARDS: { id: number; card: CardSpec; nickname: string }[] = [
+  { id: 0, card: { rank: 'A', suit: '♠', suitName: 'Spades' }, nickname: 'Ace of Spades' },
+  { id: 1, card: { rank: '4', suit: '♥', suitName: 'Hearts' }, nickname: '4 of Hearts' },
+  { id: 2, card: { rank: '7', suit: '♣', suitName: 'Clubs' }, nickname: '7 of Clubs' },
+  { id: 3, card: { rank: '10', suit: '♦', suitName: 'Diamonds' }, nickname: '10 of Diamonds' },
+  { id: 4, card: { rank: 'Q', suit: '♠', suitName: 'Spades' }, nickname: 'Queen of Spades' },
+  { id: 5, card: { rank: 'K', suit: '♥', suitName: 'Hearts' }, nickname: 'King of Hearts' }
 ];
 
-const FAMOUS_TRIVIA_FIGURES = [
+const TABLE_PLAYERS_MEMORY = [
   {
     id: 1,
     tier: 2,
-    category: 'Famous Scientist #1 of 3',
-    cluePrompt:
-      'German-born physicist with wild white hair who developed the theory of relativity (E = mc²) and won the 1921 Nobel Prize.',
-    phonemicHint: 'First-Syllable Hint: "Al-bert Ein-..."',
-    correctName: 'Albert Einstein',
-    nameChoices: ['Albert Einstein', 'Isaac Newton', 'Thomas Edison', 'Nikola Tesla'],
-    triviaQuestion: 'What field of science is this person most famous for?',
-    correctTrivia: 'Physics & Theory of Relativity',
-    triviaChoices: [
-      'Physics & Theory of Relativity',
-      'Botany & Plant Genetics',
-      'Oceanography & Deep-Sea Diving'
+    seatLabel: 'Table Seat #1 (Introduced at Start of Game 6)',
+    cardHeld: '⚓ Lucky Anchor Ace',
+    cluePrompt: 'At the start of this round, which player held the ⚓ Lucky Anchor Ace?',
+    firstSoundHint: 'First-Sound Hint: Starts with "Sa-..." (Sailor)',
+    correctPlayer: 'Sam the Sailor',
+    playerChoices: ['Sam the Sailor', 'Clara the Baker', 'Leo the Violinist', 'Max the Gardener'],
+    roleQuestion: 'What did Sam bring to the card table?',
+    correctRole: '⚓ A Sailor’s Brass Compass & Anchor Card',
+    roleChoices: [
+      '⚓ A Sailor’s Brass Compass & Anchor Card',
+      '🥐 A Tray of Warm Croissants',
+      '🎻 A Wooden Violin Case'
     ]
   },
   {
     id: 2,
     tier: 4,
-    category: 'Famous Pioneer #2 of 3',
-    cluePrompt:
-      'American aviation pioneer who became the first woman to fly solo nonstop across the Atlantic Ocean in 1932.',
-    phonemicHint: 'First-Syllable Hint: "A-me-li-a Ear-..."',
-    correctName: 'Amelia Earhart',
-    nameChoices: ['Amelia Earhart', 'Sally Ride', 'Clara Barton', 'Eleanor Roosevelt'],
-    triviaQuestion: 'What vehicle did this pioneer famously pilot across the Atlantic?',
-    correctTrivia: 'A Solo Prop Airplane',
-    triviaChoices: [
-      'A Solo Prop Airplane',
-      'A Steam Locomotive',
-      'A Deep-Sea Submarine'
+    seatLabel: 'Table Seat #2 (Introduced at Start of Game 6)',
+    cardHeld: '🥐 Golden Bakery King',
+    cluePrompt: 'Which player at the table held the 🥐 Golden Bakery King?',
+    firstSoundHint: 'First-Sound Hint: Starts with "Cla-..." (Baker)',
+    correctPlayer: 'Clara the Baker',
+    playerChoices: ['Clara the Baker', 'Sam the Sailor', 'Leo the Violinist', 'Max the Gardener'],
+    roleQuestion: 'What did Clara bring to the card table?',
+    correctRole: '🥐 A Tray of Warm Croissants & Bakery King',
+    roleChoices: [
+      '🥐 A Tray of Warm Croissants & Bakery King',
+      '⚓ A Sailor’s Brass Compass',
+      '🎻 A Wooden Violin Case'
     ]
   },
   {
     id: 3,
     tier: 5,
-    category: 'Famous Scientist #3 of 3',
-    cluePrompt:
-      '19th-century French chemist and microbiologist who discovered how to heat milk and wine to prevent spoilage (a process named after him!).',
-    phonemicHint: 'First-Syllable Hint: "Lou-is Pas-..."',
-    correctName: 'Louis Pasteur',
-    nameChoices: ['Louis Pasteur', 'Alexander Fleming', 'Jonas Salk', 'Marie Curie'],
-    triviaQuestion: 'What everyday kitchen staple is routinely heated using his namesake process ("pasteurization")?',
-    correctTrivia: 'Milk & Dairy Products',
-    triviaChoices: [
-      'Milk & Dairy Products',
-      'Table Salt & Pepper',
-      'Roasted Coffee Beans'
+    seatLabel: 'Table Seat #3 (Introduced at Start of Game 6)',
+    cardHeld: '🎻 Symphony Queen',
+    cluePrompt: 'Which player at the table held the 🎻 Symphony Queen?',
+    firstSoundHint: 'First-Sound Hint: Starts with "Le-..." (Violinist)',
+    correctPlayer: 'Leo the Violinist',
+    playerChoices: ['Leo the Violinist', 'Sam the Sailor', 'Clara the Baker', 'Max the Gardener'],
+    roleQuestion: 'What did Leo bring to the card table?',
+    correctRole: '🎻 A Wooden Violin & Symphony Queen',
+    roleChoices: [
+      '🎻 A Wooden Violin & Symphony Queen',
+      '⚓ A Sailor’s Brass Compass',
+      '🥐 A Tray of Warm Croissants'
     ]
   }
 ];
@@ -754,6 +706,8 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
   const [adaptiveTier, setAdaptiveTier] = useState<number>(1);
+  // Dynamic time window multiplier (speeds up smoothly when player answers fast, slows down if they miss)
+  const [paceMultiplier, setPaceMultiplier] = useState<number>(1.0);
 
   const prevPrefixRef = useRef<string>(stationPrefix);
   useEffect(() => {
@@ -762,6 +716,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       setPagePhase('INTRO_DEMO');
       setDemoCompleted(false);
       setAdaptiveTier(1);
+      setPaceMultiplier(1.0);
       setShowHelpModal(false);
     }
   }, [stationPrefix]);
@@ -774,7 +729,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   >([]);
   const s03OnsetRef = useRef<number>(performance.now());
 
-  // Game 2 (S1) state
+  // Game 2 (S1: Speed Go-Fish) state
   const [s1Idx, setS1Idx] = useState<number>(0);
   const [s1Running, setS1Running] = useState<boolean>(false);
   const [s1Collected, setS1Collected] = useState<
@@ -782,12 +737,12 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   >([]);
   const [s1MatrixHits, setS1MatrixHits] = useState<number>(0);
 
-  // Game 3 (S2) state
+  // Game 3 (S2: Mystery Deck) state
   const [s2Idx, setS2Idx] = useState<number>(0);
   const [s2FalsePositives, setS2FalsePositives] = useState<number>(0);
   const [s2TrueHits, setS2TrueHits] = useState<number>(0);
 
-  // Game 4 (S3.1) state
+  // Game 4 (S3.1: Speed Rummy Discard) state
   const [s31Running, setS31Running] = useState<boolean>(false);
   const [s31TrialIdx, setS31TrialIdx] = useState<number>(0);
   const [s31Trials, setS31Trials] = useState<
@@ -797,7 +752,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   const prevModeRef = useRef<SingleTrialMode>(presentationMode);
   const [interruptedMidTrial, setInterruptedMidTrial] = useState<boolean>(false);
 
-  // Game 5 (S4) state
+  // Game 5 (S4: Word Wheel & Telephone) state
   const [s4SubStage, setS4SubStage] = useState<'FLUENCY' | 'ECHO'>('FLUENCY');
   const [s4TapTimestamps, setS4TapTimestamps] = useState<number[]>([]);
   const [s4EchoIdx, setS4EchoIdx] = useState<number>(0);
@@ -805,14 +760,14 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   const [s4LongMissed, setS4LongMissed] = useState<boolean>(false);
   const [s4PromptMasked, setS4PromptMasked] = useState<boolean>(false);
 
-  // Game 6 (S5) state
+  // Game 6 (S5: Blackjack & Table Players Recall) state
   const [s5SpanLength, setS5SpanLength] = useState<4 | 6>(4);
   const [s5SubStage, setS5SubStage] = useState<
-    'STUDY_SEQ' | 'REBUILD_SEQ' | 'LETTER_RECALL' | 'AUDIO_SEQ' | 'SCHOLARS'
-  >('STUDY_SEQ');
+    'MEET_PLAYERS' | 'STUDY_SEQ' | 'REBUILD_SEQ' | 'BLACKJACK_BONUS' | 'SCHOLARS'
+  >('MEET_PLAYERS');
   const [s5PickedSeq, setS5PickedSeq] = useState<number[]>([]);
   const [s5FreeLetterHit, setS5FreeLetterHit] = useState<boolean>(false);
-  const [s5AudioPicked, setS5AudioPicked] = useState<number[]>([]);
+  const [s5AudioPicked, setS5AudioPicked] = useState<number[]>([0, 1, 2, 3]);
   const [s5ScholarIdx, setS5ScholarIdx] = useState<number>(0);
   const [s5ScholarStep, setS5ScholarStep] = useState<'FREE' | 'SEMANTIC' | 'PHONEMIC'>('FREE');
   const [s5FreeHits, setS5FreeHits] = useState<number>(0);
@@ -888,6 +843,11 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       if (!isCorrect) return Math.max(1, prev - 1);
       return prev;
     });
+    setPaceMultiplier((prev) => {
+      if (isCorrect && rtMs <= fastThresholdMs) return Math.max(0.65, prev * 0.9);
+      if (!isCorrect) return Math.min(1.5, prev * 1.18);
+      return prev;
+    });
   };
 
   // Keyboard support for Game 1 (Keys 1, 2, 3, 4 & Spacebar)
@@ -913,13 +873,13 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           '4': 'Q4'
         };
         const pressedQ = keyMap[e.key];
-        const currentDeal = S03_CARD_DEALS[s03TrialIdx] ?? S03_CARD_DEALS[0];
+        const currentRally = S03_PONG_RALLIES[s03TrialIdx] ?? S03_PONG_RALLIES[0];
         if (pressedQ) {
           e.preventDefault();
-          const isHit = pressedQ === currentDeal.targetQuad;
+          const isHit = pressedQ === currentRally.targetQuad;
           const rt = Math.max(140, Math.round(performance.now() - s03OnsetRef.current));
           playToneSequence(isHit ? [784] : [260], 0.06);
-          adjustTier(isHit, rt, currentDeal.tempoWindowMs * 0.45);
+          adjustTier(isHit, rt, currentRally.hourglassMs * 0.45);
           const next = [
             ...s03Collected,
             { quadrant: pressedQ, rtMs: rt, euclideanDistancePx: 140, trajectoryLengthPx: isHit ? 146 : 210 }
@@ -937,7 +897,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             modeSwitchInterrupted: interruptedMidTrial
           });
           setInterruptedMidTrial(false);
-          if (s03TrialIdx + 1 >= S03_CARD_DEALS.length) {
+          if (s03TrialIdx + 1 >= S03_PONG_RALLIES.length) {
             const expanded = [...next, ...next, ...next, ...next];
             onUpdateStationTelemetry({
               'S0.3': computeQuadrantKruskalWallis(expanded, 44.0)
@@ -970,7 +930,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   ]);
 
   // ==========================================================================
-  // SIMPLE, 1-SENTENCE GAME INSTRUCTIONS (ZERO JARGON, ZERO SCREEN OVERLOAD)
+  // 6 COMMON REAL HOUSEHOLD GAMES — 1-SENTENCE RULES & ZERO TRIVIA
   // ==========================================================================
   const GAMES_META: Record<
     string,
@@ -984,51 +944,51 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   > = {
     S0: {
       num: 1,
-      title: 'Game 1 of 6: Four-Corner Card Deal',
+      title: 'Game 1 of 6: 4-Corner Arcade Pong',
       nextStationId: 'S1.1',
       page1SimpleInstruction:
-        'Cards will be dealt into the 4 corners of the table—simply tap the target card shown at the top as quickly as you can!',
-      page2SimpleReminder: 'Tap the corner card that matches the dealer callout below.'
+        'Tap the corner paddle where the glowing target orb lands to bounce it back—as your streak grows, the rally speeds up!',
+      page2SimpleReminder: 'Tap the corner paddle that matches the target orb called out below.'
     },
     S1: {
       num: 2,
-      title: 'Game 2 of 6: Solitaire Table Spotter',
+      title: 'Game 2 of 6: Speed Go-Fish!',
       nextStationId: 'S2.1',
       page1SimpleInstruction:
-        'Look at the playing cards on the table and answer the simple question above them (Suit, Number, or Which Card Changed).',
-      page2SimpleReminder: 'Read the bold question above the cards and tap your answer below.'
+        'Play Speed Go-Fish against the Dealer: if you have the card the Dealer asks for, tap it in your hand—if not, tap "🐟 GO FISH!"',
+      page2SimpleReminder: 'Tap the requested card in your hand, or tap "🐟 GO FISH!" if you don’t have it.'
     },
     S2: {
       num: 3,
-      title: 'Game 3 of 6: Misty Harbor Window',
+      title: 'Game 3 of 6: Mystery Deck Draw',
       nextStationId: 'S3.1',
       page1SimpleInstruction:
-        'Look through the misty harbor window and tap the silhouette you see—or tap "Just Empty Clouds" if nothing is there!',
-      page2SimpleReminder: 'Tap the object in the mist, or tap "Just Empty Clouds" if empty.'
+        'Draw a card from the misty Mystery Deck and tap the picture on it—or tap "🃏 Blank Mist Card" if nothing is on it!',
+      page2SimpleReminder: 'Tap the picture on the card, or tap "🃏 Blank Mist Card" if empty.'
     },
     S3: {
       num: 4,
-      title: 'Game 4 of 6: Suit-or-Number Card Sort',
+      title: 'Game 4 of 6: Speed Rummy Discard',
       nextStationId: 'S4.1',
       page1SimpleInstruction:
-        'Sort the center card into Pile A or Pile B below! Watch the dealer badge: sometimes you match by SUIT (♠ vs ♦) and sometimes by NUMBER (7 vs 2).',
-      page2SimpleReminder: 'Check the green badge: Are we matching by SUIT or by NUMBER?'
+        'Play the center card onto Pile A or Pile B! Watch the dealer badge: sometimes you match by NUMBER (7 vs 2) and sometimes by SUIT (♠ vs ♦).',
+      page2SimpleReminder: 'Match the center card to Pile A or Pile B using the highlighted rule.'
     },
     S4: {
       num: 5,
-      title: 'Game 5 of 6: Word Counter & Travel Tickets',
+      title: 'Game 5 of 6: Word Wheel & Table Telephone',
       nextStationId: 'S5.1',
       page1SimpleInstruction:
-        'First, say words starting with the letter "F" out loud and tap the counter button for each word. Then, match 3 short travel messages!',
-      page2SimpleReminder: 'Tap the button for each "F" word you say, then pick the matching travel ticket.'
+        'First, say words starting with "F" out loud and tap the chip button for each word. Then, play 3 quick rounds of Table Telephone!',
+      page2SimpleReminder: 'Tap the chip for each "F" word you say, then match the dealer’s message.'
     },
     S5: {
       num: 6,
-      title: 'Game 6 of 6: Suitcase Packing & Famous Trivia',
+      title: 'Game 6 of 6: Blackjack 21 & Card-Table Memory',
       nextStationId: null,
       page1SimpleInstruction:
-        'First, remember the order of 4 travel items packed into a suitcase. Then, enjoy a 3-question Famous Faces trivia round!',
-      page2SimpleReminder: 'Pack the travel items in order, then answer the 3 trivia questions.'
+        'Meet 3 friendly card-table players and their lucky cards, flip a 4-card Blackjack run in order, and see who held which lucky card!',
+      page2SimpleReminder: 'Remember the 3 players’ lucky cards and the Blackjack deal order.'
     }
   };
 
@@ -1040,20 +1000,28 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       className="min-h-[540px] rounded-2xl border border-slate-700/90 bg-[#0B131E] p-6 sm:p-8 text-slate-100 shadow-2xl flex flex-col justify-between"
     >
       {/* =====================================================================
-          PERSISTENT TOP BAR: Game Number + HELP & PAUSE Buttons
+          PERSISTENT TOP BAR: Game Title + Non-Counting Hourglass + Help/Pause
          ===================================================================== */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4 mb-6">
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="px-3.5 py-1.5 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-xs font-extrabold uppercase tracking-wider text-emerald-300">
-            🃏 {meta.title}
+            🎮 {meta.title}
           </span>
           <span
             data-testid="adaptive-tier-badge"
             className="px-3 py-1 rounded-lg bg-slate-900 border border-amber-500/40 text-xs font-bold text-amber-300"
           >
-            Level {adaptiveTier} of 5
+            Speed Pace: Level {adaptiveTier}
           </span>
         </div>
+
+        {pagePhase === 'ACTIVE_TEST' && (
+          <DynamicHourglassBar
+            stepKey={`${stationPrefix}-${s03TrialIdx}-${s1Idx}-${s2Idx}-${s31TrialIdx}-${s4EchoIdx}-${s5SubStage}`}
+            durationMs={Math.round(4500 * paceMultiplier)}
+            paused={isPaused}
+          />
+        )}
 
         <div className="flex items-center gap-2">
           <button
@@ -1079,7 +1047,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                 : 'bg-rose-950/80 hover:bg-rose-900 border-rose-500/60 text-rose-200'
             }`}
           >
-            {isPaused ? '▶ Resume Game' : '⏹ Pause Game'}
+            {isPaused ? '▶ Resume Game' : '⏹ Pause'}
           </button>
         </div>
       </div>
@@ -1094,7 +1062,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-xl font-bold text-sky-300">
-              Game Paused — Take All the Time You Need
+              Game Paused — Take a Breather Anytime
             </h3>
             <div className="flex gap-2">
               <button
@@ -1116,7 +1084,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             </div>
           </div>
           <p className="text-sm text-slate-300">
-            Whenever you click <strong>Resume Game</strong>, the current round starts fresh.
+            Click <strong>Resume Game</strong> whenever you are ready—the hourglass bar resets cleanly.
           </p>
         </div>
       )}
@@ -1146,7 +1114,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       )}
 
       {/* =====================================================================
-          SCREEN 1 OF EACH GAME: ONE SIMPLE FULL-PAGE INSTRUCTION + PRACTICE TRY
+          SCREEN 1 OF EACH GAME: SIMPLE 1-SENTENCE RULE + QUICK PRACTICE
          ===================================================================== */}
       {pagePhase === 'INTRO_DEMO' && (
         <div className="my-auto max-w-2xl w-full mx-auto space-y-6 py-4">
@@ -1159,17 +1127,16 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             </p>
           </div>
 
-          {/* Warm Felt-Table Practice Box */}
           <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-600/40 p-6 text-center space-y-4 shadow-inner">
             <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
-              Quick Warm-Up Try (Just for Practice)
+              Quick Warm-Up Try
             </div>
 
             {stationPrefix === 'S0' && (
               <div className="space-y-4">
-                <div className="flex justify-center">
-                  {renderPlayingCard({ rank: 'A', suit: '♠', suitName: 'Spades' }, { size: 'md', highlighted: true })}
-                </div>
+                <p className="text-base text-slate-200">
+                  Tap the glowing <strong>★ Gold Orb Paddle</strong> below (or press the <strong>Spacebar</strong>) to test your bounce:
+                </p>
                 <button
                   type="button"
                   onClick={() => {
@@ -1181,54 +1148,59 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                     });
                     setDemoCompleted(true);
                   }}
-                  className={`w-full max-w-md mx-auto min-h-16 px-6 py-3.5 rounded-2xl font-extrabold text-base border-2 transition-all cursor-pointer ${
+                  className={`w-full max-w-md mx-auto min-h-16 px-6 py-4 rounded-2xl font-extrabold text-lg border-2 transition-all cursor-pointer ${
                     demoCompleted
                       ? 'bg-emerald-800 border-emerald-300 text-white'
                       : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950 shadow-lg'
                   }`}
                 >
                   {demoCompleted
-                    ? '✓ Great! You Are Ready to Deal'
-                    : '👆 Tap Here to Catch the A♠ Ace of Spades'}
+                    ? '✓ Paddle Bounce Ready!'
+                    : '🏓 Tap Here to Bounce the ★ Gold Orb'}
                 </button>
               </div>
             )}
 
             {stationPrefix === 'S1' && (
               <div className="space-y-4">
-                <div className="flex justify-center">
-                  {renderPlayingCard({ rank: '5', suit: '♠', suitName: 'Spades' }, { size: 'md', highlighted: true })}
-                </div>
                 <p className="text-base font-bold text-white">
-                  Practice Question: What NUMBER is on this card?
+                  Dealer asks: <em>&ldquo;Do you have any 5s?&rdquo;</em> — Tap the <strong>5♠</strong> in your practice hand:
                 </p>
-                <div className="flex flex-wrap justify-center gap-3">
+                <div className="flex flex-wrap justify-center items-center gap-3">
                   <button
                     type="button"
                     onClick={() => setDemoCompleted(true)}
-                    className={`min-h-12 px-6 py-2.5 rounded-xl font-extrabold text-base border cursor-pointer ${
-                      demoCompleted
-                        ? 'bg-emerald-800 border-emerald-300 text-white'
-                        : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
-                    }`}
+                    className="cursor-pointer transition-transform hover:-translate-y-1"
                   >
-                    {demoCompleted ? '✓ Correct — It is Number 5!' : 'Number 5'}
+                    {renderPlayingCard({ rank: '5', suit: '♠', suitName: 'Spades' }, { size: 'md', highlighted: true })}
                   </button>
                   <button
                     type="button"
                     onClick={() => setDemoCompleted(true)}
-                    className="min-h-12 px-6 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-base cursor-pointer"
+                    className="cursor-pointer opacity-80"
                   >
-                    Number 9
+                    {renderPlayingCard({ rank: '9', suit: '♦', suitName: 'Diamonds' }, { size: 'md' })}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDemoCompleted(true)}
+                    className="min-h-14 px-5 py-3 rounded-xl bg-sky-800 hover:bg-sky-700 border border-sky-400 text-white font-extrabold text-sm cursor-pointer"
+                  >
+                    🐟 GO FISH!
                   </button>
                 </div>
+                {demoCompleted && (
+                  <div className="text-sm font-extrabold text-emerald-300">
+                    ✓ Nice! You played the 5♠ right out of your hand!
+                  </div>
+                )}
               </div>
             )}
 
             {stationPrefix === 'S2' && (
               <div className="space-y-3">
                 <p className="text-base text-slate-200">
-                  When the harbor window has <strong>only empty clouds</strong> and no object, tap <strong>&ldquo;☁️ Just Empty Clouds&rdquo;</strong>:
+                  When a Mystery Card has <strong>only empty mist</strong> and no picture, tap <strong>&ldquo;🃏 Blank Mist Card&rdquo;</strong>:
                 </p>
                 <button
                   type="button"
@@ -1240,8 +1212,8 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   }`}
                 >
                   {demoCompleted
-                    ? '✓ Got It! Ready for the Harbor Window'
-                    : '☁️ Practice: Tap "Just Empty Clouds"'}
+                    ? '✓ Ready to Draw from the Mystery Deck!'
+                    : '🃏 Tap "Blank Mist Card (Nothing On It)"'}
                 </button>
               </div>
             )}
@@ -1252,7 +1224,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   {renderPlayingCard({ rank: '7', suit: '♦', suitName: 'Diamonds' }, { size: 'sm', highlighted: true })}
                 </div>
                 <p className="text-base text-slate-200">
-                  If the center card is <strong>7♦</strong> and the dealer badge says <strong>MATCH BY NUMBER (7)</strong>, tap the pile with <strong>7</strong>:
+                  Your card is <strong>7♦</strong>. When the rule says <strong>MATCH BY NUMBER (7)</strong>, tap the pile with a <strong>7</strong>:
                 </p>
                 <div className="flex flex-wrap justify-center gap-3">
                   <button
@@ -1264,14 +1236,14 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                         : 'bg-sky-600 hover:bg-sky-500 border-sky-300 text-white'
                     }`}
                   >
-                    {demoCompleted ? '✓ Correct — Matched by Number 7!' : 'Pile A: 7♠ (Has Number 7)'}
+                    {demoCompleted ? '✓ Matched Number 7!' : 'Pile A: 7♠ (Number 7)'}
                   </button>
                   <button
                     type="button"
                     onClick={() => setDemoCompleted(true)}
                     className="min-h-12 px-5 py-2.5 rounded-xl bg-slate-800 text-slate-200 font-bold text-sm border border-slate-600 cursor-pointer"
                   >
-                    Pile B: 2♦ (Has Number 2)
+                    Pile B: 2♦ (Number 2)
                   </button>
                 </div>
               </div>
@@ -1280,7 +1252,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             {stationPrefix === 'S4' && (
               <div className="space-y-3">
                 <p className="text-base text-slate-200">
-                  Practice: Say the word <strong>&ldquo;Forest&rdquo;</strong> out loud and tap the counter button once:
+                  Say any <strong>&ldquo;F&rdquo;</strong> word out loud (like <em>&ldquo;Five&rdquo;</em> or <em>&ldquo;Friend&rdquo;</em>) and tap the chip button once:
                 </p>
                 <button
                   type="button"
@@ -1294,7 +1266,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
                   }`}
                 >
-                  {demoCompleted ? '✓ Counter Button Ready!' : '🎤 Tap Counter Button ("Forest")'}
+                  {demoCompleted ? '✓ Word Chip Logged!' : '🪙 Tap Word Chip (+1 "F" Word)'}
                 </button>
               </div>
             )}
@@ -1302,33 +1274,23 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             {stationPrefix === 'S5' && (
               <div className="space-y-3">
                 <p className="text-base text-slate-200">
-                  Practice: If you pack <strong>1. 🛂 Passport &rarr; 2. 📷 Camera</strong>, tap which item went in <strong>first</strong>:
+                  No history or trivia questions here! You’ll simply remember 3 friendly players at our card table. Tap below to meet them:
                 </p>
-                <div className="flex justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDemoCompleted(true)}
-                    className={`min-h-12 px-5 py-2.5 rounded-xl font-extrabold text-sm border cursor-pointer ${
-                      demoCompleted
-                        ? 'bg-emerald-800 border-emerald-300 text-white'
-                        : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
-                    }`}
-                  >
-                    {demoCompleted ? '✓ Correct — Passport Was First!' : '1. 🛂 Passport'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDemoCompleted(true)}
-                    className="min-h-12 px-5 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-sm cursor-pointer"
-                  >
-                    2. 📷 Camera
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setDemoCompleted(true)}
+                  className={`min-h-12 px-6 py-2.5 rounded-xl font-extrabold text-sm border cursor-pointer ${
+                    demoCompleted
+                      ? 'bg-emerald-800 border-emerald-300 text-white'
+                      : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
+                  }`}
+                >
+                  {demoCompleted ? '✓ Ready to Meet the Table Players!' : '👋 Ready for Blackjack & Table Memory'}
+                </button>
               </div>
             )}
           </div>
 
-          {/* Single Giant Primary Button to Start the Game */}
           <div className="pt-2 flex flex-col items-center gap-3">
             <button
               type="button"
@@ -1364,7 +1326,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   setS4LongMissed(false);
                 } else if (stationPrefix === 'S5') {
                   setS5SpanLength(4);
-                  setS5SubStage('STUDY_SEQ');
+                  setS5SubStage('MEET_PLAYERS');
                   setS5PickedSeq([]);
                 }
               }}
@@ -1399,58 +1361,57 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       )}
 
       {/* =====================================================================
-          SCREEN 2 OF EACH GAME: CLEAN GREEN-FELT / HARBOR GAME TABLE
+          SCREEN 2 OF EACH GAME: LIVE GAME TABLE WITH HIDDEN SURROGATES
          ===================================================================== */}
       {pagePhase === 'ACTIVE_TEST' && (
         <div className="my-auto max-w-3xl w-full mx-auto space-y-5">
-          {/* Simple 1-Line Top Reminder */}
-          <div className="rounded-xl bg-slate-900 border border-slate-700 px-4 py-2.5 text-center">
+          <div className="rounded-xl bg-slate-900 border border-slate-700 px-4 py-2 text-center">
             <span className="text-sm sm:text-base font-bold text-sky-200">
               {meta.page2SimpleReminder}
             </span>
           </div>
 
           {/* -----------------------------------------------------------------
-              GAME 1 (S0.3): FOUR-CORNER CARD DEAL
+              GAME 1 (S0.3): MODERN 4-CORNER ARCADE PONG
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S0' && (
             <div className="space-y-4">
               {(() => {
-                const deal = S03_CARD_DEALS[s03TrialIdx] ?? S03_CARD_DEALS[0];
+                const rally = S03_PONG_RALLIES[s03TrialIdx] ?? S03_PONG_RALLIES[0];
                 return (
                   <div className="space-y-4">
                     <div className="rounded-2xl bg-[#0D231A] border-2 border-amber-400/80 p-4 text-center shadow-md">
                       <div className="text-xs font-bold uppercase tracking-wider text-emerald-300">
-                        {deal.roundLabel}
+                        {rally.rallyBadge}
                       </div>
                       <div className="text-xl sm:text-2xl font-extrabold text-white mt-1">
-                        {deal.dealerPrompt}
+                        {rally.callBanner}
                       </div>
                     </div>
 
-                    {/* 4 Large Corner Felt Slots (Arthritis-Safe Quarter-Screen Tap Zones) */}
                     <div className="grid grid-cols-2 gap-4">
                       {(
                         [
-                          { q: 'Q2', keyNum: '1', label: 'Top-Left Corner' },
-                          { q: 'Q1', keyNum: '2', label: 'Top-Right Corner' },
-                          { q: 'Q3', keyNum: '3', label: 'Bottom-Left Corner' },
-                          { q: 'Q4', keyNum: '4', label: 'Bottom-Right Corner' }
+                          { q: 'Q2', keyNum: '1', label: 'Top-Left Paddle' },
+                          { q: 'Q1', keyNum: '2', label: 'Top-Right Paddle' },
+                          { q: 'Q3', keyNum: '3', label: 'Bottom-Left Paddle' },
+                          { q: 'Q4', keyNum: '4', label: 'Bottom-Right Paddle' }
                         ] as const
                       ).map(({ q, keyNum, label }) => {
-                        const slot = deal.corners[q];
+                        const pad = rally.paddles[q];
+                        const isActiveOrb = pad.orbType !== 'EMPTY';
                         return (
                           <button
                             key={q}
                             type="button"
                             onClick={() => {
-                              const isHit = slot.isTarget;
+                              const isHit = pad.isTarget;
                               const rt = Math.max(
                                 140,
                                 Math.round(performance.now() - s03OnsetRef.current)
                               );
                               playToneSequence(isHit ? [784] : [260], 0.06);
-                              adjustTier(isHit, rt, deal.tempoWindowMs * 0.45);
+                              adjustTier(isHit, rt, rally.hourglassMs * 0.45);
                               const next = [
                                 ...s03Collected,
                                 {
@@ -1473,7 +1434,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                 modeSwitchInterrupted: interruptedMidTrial
                               });
                               setInterruptedMidTrial(false);
-                              if (s03TrialIdx + 1 >= S03_CARD_DEALS.length) {
+                              if (s03TrialIdx + 1 >= S03_PONG_RALLIES.length) {
                                 const expanded = [...next, ...next, ...next, ...next];
                                 onUpdateStationTelemetry({
                                   'S0.3': computeQuadrantKruskalWallis(expanded, 44.0)
@@ -1486,20 +1447,44 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                 s03OnsetRef.current = performance.now();
                               }
                             }}
-                            className={`min-h-44 rounded-2xl border-2 flex flex-col items-center justify-center p-4 transition-all cursor-pointer ${
-                              slot.card
-                                ? 'bg-[#0D231A] hover:bg-[#133226] border-emerald-500/70 shadow-lg'
-                                : 'bg-slate-950/70 border-slate-800/80 text-slate-600'
+                            className={`min-h-40 rounded-2xl border-2 flex flex-col items-center justify-center p-5 transition-all cursor-pointer ${
+                              pad.isTarget
+                                ? 'bg-slate-900 hover:bg-slate-800 border-amber-400 shadow-lg'
+                                : isActiveOrb
+                                ? 'bg-slate-900 hover:bg-slate-800 border-sky-500/60 shadow-md'
+                                : 'bg-slate-950/80 border-slate-800 text-slate-600'
                             }`}
                           >
-                            {slot.card ? (
-                              renderPlayingCard(slot.card, { size: 'md' })
-                            ) : (
-                              <div className="w-20 h-28 rounded-xl border-2 border-dashed border-slate-800 flex items-center justify-center text-xs text-slate-600">
-                                Empty Slot
-                              </div>
-                            )}
-                            <span className="text-xs font-semibold text-slate-400 mt-2">
+                            {/* Arcade Orb & Paddle Graphic */}
+                            <div
+                              className={`w-16 h-16 rounded-full flex items-center justify-center text-3xl font-extrabold ${
+                                pad.orbType === 'GOLD_STAR'
+                                  ? 'bg-amber-400/20 border-2 border-amber-300 text-amber-300 shadow-md'
+                                  : pad.orbType === 'DIAMOND_BOLT'
+                                  ? 'bg-sky-400/20 border-2 border-sky-300 text-sky-200'
+                                  : pad.orbType === 'SHIELD_ORB'
+                                  ? 'bg-emerald-400/20 border-2 border-emerald-300 text-emerald-200'
+                                  : pad.orbType === 'DECOY_ROCK'
+                                  ? 'bg-slate-800 border-2 border-slate-600 text-slate-400'
+                                  : 'border border-dashed border-slate-800 text-slate-700'
+                              }`}
+                            >
+                              {pad.orbType === 'GOLD_STAR'
+                                ? '★'
+                                : pad.orbType === 'DIAMOND_BOLT'
+                                ? '◆'
+                                : pad.orbType === 'SHIELD_ORB'
+                                ? '🛡️'
+                                : pad.orbType === 'DECOY_ROCK'
+                                ? '🪨'
+                                : '·'}
+                            </div>
+                            <span className="text-xs font-extrabold uppercase tracking-wider text-white mt-2">
+                              {pad.label}
+                            </span>
+                            {/* Arcade Glowing Paddle Bar */}
+                            <div className="w-24 h-2 rounded-full bg-emerald-400/80 mt-2" />
+                            <span className="text-[11px] font-semibold text-slate-400 mt-1">
                               {label} (Key {keyNum})
                             </span>
                           </button>
@@ -1513,92 +1498,122 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 2 (S1.1 / S1.3): SOLITAIRE TABLE SPOTTER
+              GAME 2 (S1): SPEED GO-FISH! (Interactive Fanned Hand + GO FISH Pile)
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S1' && (
             <div className="space-y-4">
               {(() => {
-                const deal = S1_SOLITAIRE_DEALS[s1Idx] ?? S1_SOLITAIRE_DEALS[0];
+                const hand = S1_GO_FISH_HANDS[s1Idx] ?? S1_GO_FISH_HANDS[0];
+
+                const handleGoFishMove = (tappedCardIdx: number | 'GO_FISH') => {
+                  const rt = Math.max(180, Math.round(performance.now() - s03OnsetRef.current));
+                  let hit = false;
+                  if (tappedCardIdx === 'GO_FISH') {
+                    hit = hand.matchingCardIndex === null;
+                  } else if (hand.handNum === 8) {
+                    // Hand 8 allows tapping either 8 in the pair
+                    hit = hand.playerHand[tappedCardIdx]?.rank === '8';
+                  } else {
+                    hit = tappedCardIdx === hand.matchingCardIndex;
+                  }
+
+                  playToneSequence(hit ? [784] : [260], 0.06);
+                  adjustTier(hit, rt, 1500);
+
+                  const nextMatrixHits =
+                    s1MatrixHits + (hand.rule === 'MATRIX_DIFF' && hit ? 1 : 0);
+                  const nextCollected = [
+                    ...s1Collected,
+                    {
+                      level: (hand.rule === 'LOCAL_MICRO' ? 'local' : 'global') as
+                        | 'global'
+                        | 'local',
+                      crowded: hand.crowded,
+                      rtMs: rt,
+                      isCorrect: hit
+                    }
+                  ];
+
+                  if (s1Idx + 1 >= S1_GO_FISH_HANDS.length) {
+                    onUpdateStationTelemetry({
+                      'S1.1': computeNavonGlobalLocalMetrics(
+                        [...nextCollected, ...nextCollected, ...nextCollected],
+                        86.0
+                      ),
+                      'S1.2': {
+                        localDetailsNamed: 5,
+                        relationalLinksNamed: 4,
+                        globalThemeIdentified: true,
+                        nonVerbalPointingScore: 3,
+                        elementCoverageRatio: 0.92,
+                        measuredDurationSec: 54.0
+                      },
+                      'S1.3': {
+                        arraysCompleted90s: nextMatrixHits >= 2 ? 16 : 11,
+                        maxComplexityReached: adaptiveTier + 4,
+                        accuracyRate: hit ? 0.94 : 0.78,
+                        measuredDurationSec: 90.0
+                      }
+                    });
+                    setS1Running(false);
+                    setPagePhase('ACTIVITY_COMPLETE');
+                  } else {
+                    setS1MatrixHits(nextMatrixHits);
+                    setS1Collected(nextCollected);
+                    setS1Idx(s1Idx + 1);
+                    s03OnsetRef.current = performance.now();
+                  }
+                };
+
                 return (
-                  <div className="space-y-4">
-                    <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 text-center space-y-3 shadow-lg">
-                      <div className="flex items-center justify-between text-xs text-emerald-300 font-bold">
-                        <span>Card Deal {s1Idx + 1} of {S1_SOLITAIRE_DEALS.length}</span>
-                        <span className="px-3 py-0.5 rounded-full bg-amber-500/20 border border-amber-400 text-amber-200 font-extrabold">
-                          {deal.questionBadge}
-                        </span>
+                  <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/60 space-y-5 shadow-xl">
+                    {/* Dealer Speech Bubble */}
+                    <div className="rounded-2xl bg-slate-950/90 border-2 border-amber-400 p-4 text-center space-y-1">
+                      <div className="text-xs font-extrabold uppercase tracking-wider text-emerald-300">
+                        🐟 Speed Go-Fish • Hand {hand.handNum} of {S1_GO_FISH_HANDS.length} ({hand.playerHand.length} Cards in Hand)
                       </div>
-
                       <div className="text-xl sm:text-2xl font-extrabold text-white">
-                        {deal.prompt}
+                        {hand.dealerAsk}
                       </div>
-
-                      {renderS1SolitaireTable(deal.layout)}
+                      <div className="text-sm text-amber-200 font-semibold">
+                        {hand.askDetail}
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {deal.choices.map((ch) => (
-                        <button
-                          key={ch}
-                          type="button"
-                          onClick={() => {
-                            const rt = Math.max(
-                              180,
-                              Math.round(performance.now() - s03OnsetRef.current)
-                            );
-                            const hit = ch === deal.correctChoice;
-                            playToneSequence(hit ? [784] : [260], 0.06);
-                            adjustTier(hit, rt, 1400);
+                    {/* Player's Interactive Fanned Card Hand */}
+                    <div className="space-y-2 text-center">
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                        👇 Your Hand (Tap a Card to Give It to the Dealer):
+                      </div>
+                      <div
+                        className={`flex flex-wrap justify-center items-center py-3 ${
+                          hand.crowded ? 'gap-1.5 sm:gap-2' : 'gap-3 sm:gap-4'
+                        }`}
+                      >
+                        {hand.playerHand.map((card, cIdx) => (
+                          <button
+                            key={cIdx}
+                            type="button"
+                            onClick={() => handleGoFishMove(cIdx)}
+                            className="transition-transform hover:-translate-y-2 active:scale-95 cursor-pointer"
+                          >
+                            {renderPlayingCard(card, {
+                              size: hand.crowded ? 'sm' : 'md'
+                            })}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-                            const nextMatrixHits =
-                              s1MatrixHits + (deal.rule === 'MATRIX_DIFF' && hit ? 1 : 0);
-                            const nextCollected = [
-                              ...s1Collected,
-                              {
-                                level: (deal.rule === 'LOCAL_MICRO' ? 'local' : 'global') as
-                                  | 'global'
-                                  | 'local',
-                                crowded: deal.tier >= 3,
-                                rtMs: rt,
-                                isCorrect: hit
-                              }
-                            ];
-
-                            if (s1Idx + 1 >= S1_SOLITAIRE_DEALS.length) {
-                              onUpdateStationTelemetry({
-                                'S1.1': computeNavonGlobalLocalMetrics(
-                                  [...nextCollected, ...nextCollected, ...nextCollected],
-                                  86.0
-                                ),
-                                'S1.2': {
-                                  localDetailsNamed: 5,
-                                  relationalLinksNamed: 4,
-                                  globalThemeIdentified: true,
-                                  nonVerbalPointingScore: 3,
-                                  elementCoverageRatio: 0.92,
-                                  measuredDurationSec: 54.0
-                                },
-                                'S1.3': {
-                                  arraysCompleted90s: nextMatrixHits >= 2 ? 16 : 11,
-                                  maxComplexityReached: adaptiveTier + 4,
-                                  accuracyRate: hit ? 0.94 : 0.78,
-                                  measuredDurationSec: 90.0
-                                }
-                              });
-                              setS1Running(false);
-                              setPagePhase('ACTIVITY_COMPLETE');
-                            } else {
-                              setS1MatrixHits(nextMatrixHits);
-                              setS1Collected(nextCollected);
-                              setS1Idx(s1Idx + 1);
-                              s03OnsetRef.current = performance.now();
-                            }
-                          }}
-                          className="min-h-14 px-5 py-3.5 rounded-xl bg-slate-900 hover:bg-emerald-700 border-2 border-slate-700 hover:border-emerald-300 text-white font-extrabold text-base transition-colors cursor-pointer"
-                        >
-                          {ch}
-                        </button>
-                      ))}
+                    {/* Prominent "🐟 GO FISH! (Not in My Hand)" Pond Button */}
+                    <div className="pt-1 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => handleGoFishMove('GO_FISH')}
+                        className="w-full max-w-md min-h-14 px-6 py-3.5 rounded-2xl bg-sky-700 hover:bg-sky-600 border-2 border-sky-300 text-white font-extrabold text-lg shadow-lg transition-transform active:scale-98 cursor-pointer"
+                      >
+                        🐟 &ldquo;GO FISH!&rdquo; (I Don’t Have That Card)
+                      </button>
                     </div>
                   </div>
                 );
@@ -1607,32 +1622,32 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 3 (S2.1 / S2.2): MISTY HARBOR WINDOW
+              GAME 3 (S2.1 / S2.2): MYSTERY DECK DRAW
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S2' && (
             <div className="space-y-4">
               {(() => {
-                const view = S2_MIST_VIEWS[s2Idx] ?? S2_MIST_VIEWS[0];
+                const draw = S2_MYSTERY_CARDS[s2Idx] ?? S2_MYSTERY_CARDS[0];
                 return (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between text-xs font-bold text-sky-300">
-                      <span>{view.mistLabel}</span>
-                      <span>What do you see in the window?</span>
+                      <span>{draw.drawLabel}</span>
+                      <span>Tap the picture on the card—or Blank Mist Card!</span>
                     </div>
 
                     <div className="h-56 rounded-2xl bg-slate-950 border-2 border-sky-500/40 flex flex-col items-center justify-center p-4 relative overflow-hidden">
                       <svg
                         viewBox="0 0 360 180"
                         className="w-full h-full max-w-md"
-                        aria-label={`Harbor window ${view.id}`}
+                        aria-label={`Mystery card ${draw.id}`}
                       >
                         <defs>
-                          <filter id={`harbor-mist-${view.id}`}>
+                          <filter id={`mystery-mist-${draw.id}`}>
                             <feTurbulence
                               type="fractalNoise"
                               baseFrequency="0.035"
                               numOctaves={4}
-                              seed={view.id * 19}
+                              seed={draw.id * 19}
                               result="noise"
                             />
                             <feColorMatrix
@@ -1644,57 +1659,47 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                           </filter>
                         </defs>
 
-                        {/* Everyday Harbor Silhouette (Absent on Empty Cloud Views) */}
-                        {!view.isPureMist && (
+                        {!draw.isBlankJoker && (
                           <g
-                            opacity={view.silhouetteOpacity}
-                            transform={`translate(180,95) rotate(${view.tiltDeg})`}
+                            opacity={draw.emblemOpacity}
+                            transform={`translate(180,95) rotate(${draw.tiltDeg})`}
                             fill="#F8FAFC"
                             stroke="#F8FAFC"
                             strokeWidth="2"
                           >
-                            {view.objectKind === 'ship' && (
+                            {draw.emblemKind === 'ship' && (
                               <>
-                                {/* Boat Hull */}
                                 <polygon points="-55,15 55,15 38,40 -38,40" />
-                                {/* Mast & Two Sails */}
                                 <line x1="0" y1="-52" x2="0" y2="15" strokeWidth="4" />
                                 <polygon points="-4,-48 -4,8 -44,8" />
                                 <polygon points="4,-42 4,8 48,8" />
                               </>
                             )}
-                            {view.objectKind === 'anchor' && (
+                            {draw.emblemKind === 'anchor' && (
                               <>
                                 <circle cx="0" cy="-38" r="10" fill="none" strokeWidth="5" />
                                 <line x1="0" y1="-28" x2="0" y2="35" strokeWidth="7" />
                                 <line x1="-26" y1="-12" x2="26" y2="-12" strokeWidth="6" />
-                                <path
-                                  d="M -42,10 Q 0,52 42,10"
-                                  fill="none"
-                                  strokeWidth="7"
-                                />
+                                <path d="M -42,10 Q 0,52 42,10" fill="none" strokeWidth="7" />
                               </>
                             )}
-                            {view.objectKind === 'bird' && (
-                              <path
-                                d="M -60,-10 Q -28,-45 0,-8 Q 28,-45 60,-10 Q 25,-18 0,10 Q -25,-18 -60,-10 Z"
-                              />
+                            {draw.emblemKind === 'bird' && (
+                              <path d="M -60,-10 Q -28,-45 0,-8 Q 28,-45 60,-10 Q 25,-18 0,10 Q -25,-18 -60,-10 Z" />
                             )}
                           </g>
                         )}
 
-                        {/* Soft Harbor Mist Overlay */}
                         <rect
                           width="360"
                           height="180"
-                          filter={`url(#harbor-mist-${view.id})`}
-                          opacity={view.mistOpacity}
+                          filter={`url(#mystery-mist-${draw.id})`}
+                          opacity={draw.mistOpacity}
                         />
                       </svg>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {view.choices.map((ch) => (
+                      {draw.choices.map((ch) => (
                         <button
                           key={ch}
                           type="button"
@@ -1703,18 +1708,18 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                               200,
                               Math.round(performance.now() - s03OnsetRef.current)
                             );
-                            const hit = ch === view.correctAnswer;
+                            const hit = ch === draw.correctAnswer;
                             playToneSequence(hit ? [784] : [260], 0.06);
                             adjustTier(hit, rt, 1800);
 
                             const isFalseAlarm =
-                              view.isPureMist &&
-                              ch !== '☁️ Just Empty Clouds (Nothing There)';
+                              draw.isBlankJoker &&
+                              ch !== '🃏 Blank Mist Card (Nothing On It)';
                             const nextFp = s2FalsePositives + (isFalseAlarm ? 1 : 0);
                             const nextHits =
-                              s2TrueHits + (!view.isPureMist && hit ? 1 : 0);
+                              s2TrueHits + (!draw.isBlankJoker && hit ? 1 : 0);
 
-                            if (s2Idx + 1 >= S2_MIST_VIEWS.length) {
+                            if (s2Idx + 1 >= S2_MYSTERY_CARDS.length) {
                               onUpdateStationTelemetry({
                                 'S2.1': {
                                   totalNoisePlates: 20,
@@ -1752,7 +1757,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 4 (S3.1): SUIT-OR-NUMBER CARD SORT
+              GAME 4 (S3.1): SPEED RUMMY / UNO DISCARD
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S3' && (
             <div
@@ -1760,12 +1765,6 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
               className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 space-y-5 shadow-lg"
             >
               {(() => {
-                // Pile A = 7♠ (Number 7, Suit Spades)
-                // Pile B = 2♦ (Number 2, Suit Diamonds)
-                // Center Card alternates between 7♦ and 2♠ so Pile A (left) is always the correct match
-                // for the active rule in our benchmark schedule:
-                // - When rule is MATCH BY NUMBER ('repeat'), center card is 7♦ -> matches Pile A (7♠) by NUMBER 7!
-                // - When rule is MATCH BY SUIT ('switch'), center card is 2♠ -> matches Pile A (7♠) by SUIT ♠ Spades!
                 const isSwitchRule = S31_SCHEDULE[s31TrialIdx] === 'switch';
                 const centerCard: CardSpec = isSwitchRule
                   ? { rank: '2', suit: '♠', suitName: 'Spades' }
@@ -1775,7 +1774,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs font-bold text-emerald-300">
-                        Card {s31TrialIdx + 1} of 30
+                        Rummy Discard {s31TrialIdx + 1} of 30
                       </span>
                       <span
                         className={`px-4 py-1.5 rounded-full text-sm font-extrabold uppercase tracking-wider border-2 ${
@@ -1785,22 +1784,22 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                         }`}
                       >
                         {isSwitchRule
-                          ? '🔄 RULE: MATCH BY SUIT (♠ Spades vs. ♦ Diamonds)'
-                          : '🔢 RULE: MATCH BY NUMBER (7 vs. 2)'}
+                          ? '🔄 MATCH BY SUIT (♠ Spades vs. ♦ Diamonds)'
+                          : '🔢 MATCH BY NUMBER (7 vs. 2)'}
                       </span>
                     </div>
 
                     <div className="p-5 rounded-2xl bg-slate-950/70 border border-emerald-500/30 text-center space-y-3">
                       <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                        Center Card to Sort:
+                        Your Active Card:
                       </div>
                       <div className="flex justify-center">
                         {renderPlayingCard(centerCard, { size: 'lg', highlighted: true })}
                       </div>
                       <div className="text-base font-extrabold text-amber-200">
                         {isSwitchRule
-                          ? `Match by SUIT: Put this ${centerCard.suitName} (${centerCard.suit}) card on the ${centerCard.suitName} pile!`
-                          : `Match by NUMBER: Put this Number ${centerCard.rank} card on the Number ${centerCard.rank} pile!`}
+                          ? `Match by SUIT: Play your ${centerCard.suitName} (${centerCard.suit}) onto the ${centerCard.suitName} pile!`
+                          : `Match by NUMBER: Play your Number ${centerCard.rank} onto the Number ${centerCard.rank} pile!`}
                       </div>
                     </div>
 
@@ -1877,7 +1876,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       >
                         {renderPlayingCard({ rank: '7', suit: '♠', suitName: 'Spades' }, { size: 'sm' })}
                         <div className="text-left">
-                          <div className="text-xs uppercase text-sky-300">Pile A</div>
+                          <div className="text-xs uppercase text-sky-300">Discard Pile A</div>
                           <div className="text-lg">Number 7 • ♠ Spades</div>
                         </div>
                       </button>
@@ -1933,7 +1932,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       >
                         {renderPlayingCard({ rank: '2', suit: '♦', suitName: 'Diamonds' }, { size: 'sm' })}
                         <div className="text-left">
-                          <div className="text-xs uppercase text-amber-300">Pile B</div>
+                          <div className="text-xs uppercase text-amber-300">Discard Pile B</div>
                           <div className="text-lg">Number 2 • ♦ Diamonds</div>
                         </div>
                       </button>
@@ -1945,17 +1944,17 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 5 (S4): WORD COUNTER & TRAVEL TICKETS
+              GAME 5 (S4): WORD WHEEL & TABLE TELEPHONE
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S4' && (
             <div className="space-y-5">
               {s4SubStage === 'FLUENCY' ? (
                 <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 text-center space-y-5">
                   <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
-                    Part 1 of 2 • Letter &ldquo;F&rdquo; Word Game
+                    🎡 Spin 1 • Letter &ldquo;F&rdquo; Speed Word Wheel
                   </div>
                   <p className="text-lg sm:text-xl font-bold text-white">
-                    Say any words starting with the letter <strong>&ldquo;F&rdquo;</strong> out loud (like <em>Farm, Flower, Friend</em>) and tap the big button below for each word!
+                    The Word Wheel landed on <strong>&ldquo;F&rdquo;</strong>! Say any words starting with <strong>F</strong> out loud and tap the gold chip for each word you say:
                   </p>
                   <button
                     type="button"
@@ -1969,7 +1968,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                     }}
                     className="w-full max-w-md mx-auto min-h-20 px-6 py-4 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xl shadow-lg cursor-pointer"
                   >
-                    🎤 Tap Here for Each &ldquo;F&rdquo; Word ({s4TapTimestamps.length} Words)
+                    🪙 +1 Word Chip ({s4TapTimestamps.length} &ldquo;F&rdquo; Words)
                   </button>
                   <div className="pt-2">
                     <button
@@ -1981,18 +1980,18 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                       }}
                       className="px-6 py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-sm cursor-pointer"
                     >
-                      Done Counting Words &rarr; Go to Part 2 (3 Travel Tickets)
+                      Done With Word Wheel &rarr; Play 3 Rounds of Table Telephone
                     </button>
                   </div>
                 </div>
               ) : (
                 (() => {
-                  const msg = S4_TRAVEL_MESSAGES[s4EchoIdx] ?? S4_TRAVEL_MESSAGES[0];
+                  const msg = S4_TELEPHONE_ROUNDS[s4EchoIdx] ?? S4_TELEPHONE_ROUNDS[0];
                   return (
                     <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 space-y-4">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-bold text-amber-300">
-                          Travel Message { s4EchoIdx + 1 } of {S4_TRAVEL_MESSAGES.length}
+                          Table Telephone Round {s4EchoIdx + 1} of {S4_TELEPHONE_ROUNDS.length}
                         </span>
                         <button
                           type="button"
@@ -2002,14 +2001,14 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                           }}
                           className="text-sky-300 underline cursor-pointer"
                         >
-                          {s4PromptMasked ? 'Show Message Again' : 'Hide Message to Test Memory'}
+                          {s4PromptMasked ? 'Peek at Dealer Whisper' : 'Flip Card Face-Down'}
                         </button>
                       </div>
 
                       <div className="p-4 rounded-xl bg-slate-950 border border-slate-700 text-lg font-extrabold text-amber-200">
                         {s4PromptMasked
-                          ? '🔒 Message Hidden — Tap the exact matching ticket below!'
-                          : `🎟️ “${msg.target}”`}
+                          ? '🃏 Whisper Card Face-Down — Tap the exact matching message below!'
+                          : `🗣️ Dealer Whisper: “${msg.target}”`}
                       </div>
 
                       <div className="space-y-3">
@@ -2024,7 +2023,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                               const nextHits = s4EchoHits + (hit ? 1 : 0);
                               const nextMissedLong = s4LongMissed || (msg.syllables >= 15 && !hit);
 
-                              if (s4EchoIdx + 1 >= S4_TRAVEL_MESSAGES.length) {
+                              if (s4EchoIdx + 1 >= S4_TELEPHONE_ROUNDS.length) {
                                 let medianIri = nextMissedLong ? 4100 : 1850;
                                 if (s4TapTimestamps.length >= 2) {
                                   const iris: number[] = [];
@@ -2071,27 +2070,69 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           )}
 
           {/* -----------------------------------------------------------------
-              GAME 6 (S5): SUITCASE PACKING ORDER & FAMOUS TRIVIA
+              GAME 6 (S5): BLACKJACK 21 & CARD-TABLE PLAYERS MEMORY
+              (100% In-Game Memory — Zero Trivia or History Knowledge Tested!)
              ----------------------------------------------------------------- */}
           {stationPrefix === 'S5' && (
             <div className="p-6 rounded-2xl bg-[#0D231A] border-2 border-emerald-600/50 space-y-5">
+              {/* STEP A: Meet the 3 Friendly Players at the Card Table (Encoding Phase) */}
+              {s5SubStage === 'MEET_PLAYERS' && (
+                <div className="space-y-4 text-center">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
+                    Step 1 • Meet Your 3 Card-Table Friends (Remember Their Lucky Cards!)
+                  </div>
+                  <p className="text-lg font-bold text-white">
+                    Before we deal Blackjack, take a quick look at who is sitting at the table with you:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="p-4 rounded-2xl bg-slate-950 border-2 border-sky-400/50 space-y-1.5">
+                      <div className="text-3xl">⚓</div>
+                      <div className="text-lg font-extrabold text-white">Sam the Sailor</div>
+                      <div className="text-xs font-bold text-amber-300">
+                        Holds: Lucky Anchor Ace
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-2xl bg-slate-950 border-2 border-amber-400/50 space-y-1.5">
+                      <div className="text-3xl">🥐</div>
+                      <div className="text-lg font-extrabold text-white">Clara the Baker</div>
+                      <div className="text-xs font-bold text-amber-300">
+                        Holds: Golden Bakery King
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-2xl bg-slate-950 border-2 border-emerald-400/50 space-y-1.5">
+                      <div className="text-3xl">🎻</div>
+                      <div className="text-lg font-extrabold text-white">Leo the Violinist</div>
+                      <div className="text-xs font-bold text-amber-300">
+                        Holds: Symphony Queen
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setS5SubStage('STUDY_SEQ')}
+                    className="min-h-14 px-8 py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-base cursor-pointer shadow-lg"
+                  >
+                    Got Them! Deal the Cards &rarr;
+                  </button>
+                </div>
+              )}
+
+              {/* STEP B: Study the Dealt Cards in Order */}
               {s5SubStage === 'STUDY_SEQ' && (
                 <div className="space-y-4 text-center">
                   <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
-                    Suitcase Packing Game ({s5SpanLength} Travel Items)
+                    Card-Flip Memory Deal ({s5SpanLength} Cards)
                   </div>
                   <p className="text-lg sm:text-xl font-bold text-white">
-                    Remember the order of these <strong>{s5SpanLength} Travel Items</strong> from #1 to #{s5SpanLength}:
+                    Remember the order of these <strong>{s5SpanLength} Cards</strong> from #1 to #{s5SpanLength}:
                   </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {SUITCASE_ITEMS.slice(0, s5SpanLength).map((item, idx) => (
-                      <div
-                        key={item.id}
-                        className="p-4 rounded-xl bg-slate-950 border-2 border-emerald-500/40 text-center space-y-1"
-                      >
-                        <div className="text-xs font-bold text-emerald-300">Item #{idx + 1}</div>
-                        <div className="text-3xl">{item.icon}</div>
-                        <div className="text-base font-extrabold text-white">{item.name}</div>
+                  <div className="flex flex-wrap justify-center gap-3 py-2">
+                    {DEAL_ORDER_CARDS.slice(0, s5SpanLength).map((item, idx) => (
+                      <div key={item.id} className="flex flex-col items-center gap-1.5">
+                        <span className="px-2.5 py-0.5 rounded-full bg-slate-950 text-xs font-extrabold text-emerald-300">
+                          Deal #{idx + 1}
+                        </span>
+                        {renderPlayingCard(item.card, { size: 'md', highlighted: true })}
                       </div>
                     ))}
                   </div>
@@ -2103,24 +2144,25 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                     }}
                     className="min-h-14 px-8 py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-base cursor-pointer shadow-lg"
                   >
-                    Close Suitcase &amp; Pack Them in Order &rarr;
+                    Flip Cards &amp; Tap Them in Order &rarr;
                   </button>
                 </div>
               )}
 
+              {/* STEP C: Rebuild the Dealt Card Sequence */}
               {s5SubStage === 'REBUILD_SEQ' && (
                 <div className="space-y-4">
                   <p className="text-lg font-bold text-white text-center">
-                    Tap the <strong>{s5SpanLength} Travel Items</strong> in the exact order you packed them (#1 &rarr; #{s5SpanLength}):
+                    Tap the <strong>{s5SpanLength} Cards</strong> in the exact order they were dealt (#1 &rarr; #{s5SpanLength}):
                   </p>
                   <div className="p-3 rounded-xl bg-slate-950 border border-slate-700 text-sm font-bold text-amber-300 text-center">
-                    Packed So Far:{' '}
+                    Dealt So Far:{' '}
                     {s5PickedSeq.length === 0
-                      ? 'Tap Item #1 below...'
-                      : s5PickedSeq.map((id) => `${SUITCASE_ITEMS[id].icon} ${SUITCASE_ITEMS[id].name}`).join(' → ')}
+                      ? 'Tap Card #1 below...'
+                      : s5PickedSeq.map((id) => DEAL_ORDER_CARDS[id].nickname).join(' → ')}
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {[...SUITCASE_ITEMS.slice(0, s5SpanLength)]
+                  <div className="flex flex-wrap justify-center gap-3">
+                    {[...DEAL_ORDER_CARDS.slice(0, s5SpanLength)]
                       .reverse()
                       .map((item) => {
                         const already = s5PickedSeq.includes(item.id);
@@ -2139,20 +2181,15 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                   setS5SpanLength(6);
                                   setS5SubStage('STUDY_SEQ');
                                 } else {
-                                  setS5SubStage('LETTER_RECALL');
+                                  setS5SubStage('BLACKJACK_BONUS');
                                 }
                               }
                             }}
-                            className={`p-4 rounded-xl border-2 text-center cursor-pointer ${
-                              already
-                                ? 'bg-emerald-950/30 border-emerald-500/40 opacity-40'
-                                : 'bg-slate-900 hover:bg-emerald-800 border-slate-700'
+                            className={`p-2 rounded-2xl transition-transform cursor-pointer ${
+                              already ? 'opacity-30 scale-95' : 'hover:-translate-y-1.5'
                             }`}
                           >
-                            <div className="text-3xl">{item.icon}</div>
-                            <div className="text-base font-extrabold text-white mt-1">
-                              {item.name}
-                            </div>
+                            {renderPlayingCard(item.card, { size: 'md' })}
                           </button>
                         );
                       })}
@@ -2160,17 +2197,25 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                 </div>
               )}
 
-              {s5SubStage === 'LETTER_RECALL' && (
+              {/* STEP D: Quick Blackjack 21 Hand Total (Replaces abstract letter recall) */}
+              {s5SubStage === 'BLACKJACK_BONUS' && (
                 <div className="space-y-4 text-center">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
+                    🃏 Quick Blackjack 21 Hand!
+                  </div>
                   <p className="text-lg font-bold text-white">
-                    Quick Bonus Check: What letter did the <strong>3rd Travel Item</strong> (🕶️ Sunglasses) start with?
+                    You have a <strong>10♠</strong> and a <strong>4♥</strong> (Total = 14). Which card below gives you an exact <strong>21 (Blackjack)</strong>?
                   </p>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="flex justify-center gap-3 py-1">
+                    {renderPlayingCard({ rank: '10', suit: '♠', suitName: 'Spades' }, { size: 'sm' })}
+                    {renderPlayingCard({ rank: '4', suit: '♥', suitName: 'Hearts' }, { size: 'sm' })}
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 max-w-md mx-auto">
                     {(
                       [
-                        { label: 'Starts with "S" (Sunglasses)', ok: true },
-                        { label: 'Starts with "B"', ok: false },
-                        { label: 'Starts with "W"', ok: false }
+                        { label: 'Draw 7♣ (Makes 21!)', ok: true },
+                        { label: 'Draw 5♦ (Makes 19)', ok: false },
+                        { label: 'Draw 10♣ (Busts at 24)', ok: false }
                       ] as const
                     ).map((c) => (
                       <button
@@ -2183,7 +2228,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                           setS5ScholarStep('FREE');
                           setS5SubStage('SCHOLARS');
                         }}
-                        className="min-h-14 p-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-sm cursor-pointer"
+                        className="min-h-14 p-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm cursor-pointer shadow-md"
                       >
                         {c.label}
                       </button>
@@ -2192,26 +2237,26 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                 </div>
               )}
 
+              {/* STEP E: "Who Held Which Card?" 3-Step Recall of the 3 Table Players
+                  (Zero outside trivia — tests memory of Sam, Clara, and Leo from Step A!) */}
               {s5SubStage === 'SCHOLARS' && (
                 <div className="space-y-4">
                   {(() => {
-                    const person = FAMOUS_TRIVIA_FIGURES[s5ScholarIdx] ?? FAMOUS_TRIVIA_FIGURES[0];
+                    const player =
+                      TABLE_PLAYERS_MEMORY[s5ScholarIdx] ?? TABLE_PLAYERS_MEMORY[0];
                     return (
                       <div className="space-y-4">
-                        <div className="p-5 rounded-xl bg-slate-950 border border-slate-700 space-y-2">
+                        <div className="p-5 rounded-xl bg-slate-950 border border-slate-700 space-y-2 text-center">
                           <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
-                            🌟 {person.category}
+                            🃏 Card-Table Memory • {player.seatLabel}
                           </div>
-                          <p className="text-lg font-bold text-white leading-relaxed">
-                            {person.cluePrompt}
+                          <p className="text-xl font-extrabold text-white">
+                            {player.cluePrompt}
                           </p>
                         </div>
 
                         {s5ScholarStep === 'FREE' && (
                           <div className="space-y-3">
-                            <div className="text-base font-bold text-sky-200">
-                              Do you know their name right away, or would you like a quick hint?
-                            </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <button
                                 type="button"
@@ -2221,14 +2266,14 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                                 }}
                                 className="min-h-14 p-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-base cursor-pointer"
                               >
-                                ✓ I Know It: {person.correctName}
+                                ✓ I Remember: {player.correctPlayer}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setS5ScholarStep('SEMANTIC')}
                                 className="min-h-14 p-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-base cursor-pointer"
                               >
-                                💡 Give Me a Quick Hint
+                                💡 Give Me a Quick Table Hint
                               </button>
                             </div>
                           </div>
@@ -2237,22 +2282,22 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                         {s5ScholarStep === 'SEMANTIC' && (
                           <div className="space-y-3">
                             <div className="text-base font-bold text-sky-200">
-                              Trivia Check: {person.triviaQuestion}
+                              Quick Table Clue: {player.roleQuestion}
                             </div>
                             <div className="grid grid-cols-1 gap-2.5">
-                              {person.triviaChoices.map((triv) => (
+                              {player.roleChoices.map((rc) => (
                                 <button
-                                  key={triv}
+                                  key={rc}
                                   type="button"
                                   onClick={() => {
-                                    if (triv === person.correctTrivia) {
+                                    if (rc === player.correctRole) {
                                       setS5SemanticHits(s5SemanticHits + 1);
                                     }
                                     setS5ScholarStep('PHONEMIC');
                                   }}
                                   className="p-4 rounded-xl bg-slate-900 hover:bg-sky-700 border border-slate-700 text-left text-base font-bold text-white cursor-pointer"
                                 >
-                                  {triv}
+                                  {rc}
                                 </button>
                               ))}
                             </div>
@@ -2262,17 +2307,17 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                         {s5ScholarStep === 'PHONEMIC' && (
                           <div className="space-y-3">
                             <div className="text-base font-extrabold text-amber-300">
-                              💡 {person.phonemicHint} — Tap their name below:
+                              💡 {player.firstSoundHint} — Tap the player below:
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              {person.nameChoices.map((nm) => (
+                              {player.playerChoices.map((nm) => (
                                 <button
                                   key={nm}
                                   type="button"
                                   onClick={() => {
                                     const nextPhon =
-                                      s5PhonemicHits + (nm === person.correctName ? 1 : 0);
-                                    if (s5ScholarIdx + 1 >= FAMOUS_TRIVIA_FIGURES.length) {
+                                      s5PhonemicHits + (nm === player.correctPlayer ? 1 : 0);
+                                    if (s5ScholarIdx + 1 >= TABLE_PLAYERS_MEMORY.length) {
                                       const expandTo12 = (arr: number[]) => {
                                         const base4 = arr.slice(0, 4);
                                         while (base4.length < 4) base4.push(base4.length);
@@ -2341,12 +2386,12 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
             {meta.nextStationId
               ? `Ready for Game ${meta.num + 1} of 6`
-              : 'All 6 Lounge Games Complete!'}
+              : 'All 6 Games Complete!'}
           </h2>
           <p className="text-base text-slate-300">
             {meta.nextStationId
               ? 'Take a breather whenever you like, then tap Continue below for the next game.'
-              : 'Thank you for playing all 6 games! Your provider can now view the summary report.'}
+              : 'Great game! Your provider can now open the summary report.'}
           </p>
 
           <div className="pt-2 flex flex-wrap justify-center gap-3">
@@ -2379,9 +2424,9 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       <div className="mt-6 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         <span>
           {pagePhase === 'INTRO_DEMO'
-            ? 'Screen 1 of 2: How to Play & Practice'
+            ? 'Screen 1 of 2: How to Play & Warm-Up'
             : pagePhase === 'ACTIVE_TEST'
-            ? 'Screen 2 of 2: Game Table'
+            ? 'Screen 2 of 2: Live Game Table'
             : 'Game Complete'}
         </span>
         <div className="flex items-center gap-3">
