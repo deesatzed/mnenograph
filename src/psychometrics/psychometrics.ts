@@ -713,6 +713,17 @@ export function evaluateTwoLayerSyndromeRouter(
     });
   }
 
+  const s41ForRule = telemetry['S4.1'];
+  if (s41ForRule && s41ForRule.phonologicalQueueDecayFlag) {
+    candidateRules.push({
+      ruleId: 'R5_PHONOLOGICAL_LOOP_ECHO_DECAY',
+      triggerStationId: 'S4.1',
+      targetProbeId: 'S5.2',
+      observedMetricSummary: `EchoAccuracy=${Math.round(s41ForRule.sentenceRepetitionAccuracy * 100)}% | MedianIRI=${s41ForRule.letterFMedianIriMs}ms`,
+      thresholdTag: 'PROPOSED / UNVALIDATED — HEURISTIC ROUTING RULE'
+    });
+  }
+
   // Apply deterministic <= maxConditionalProbes cap & hearing-check gate
   let queuedCount = 0;
   const triggeredRules: RoutingLogEntry[] = candidateRules.map((rule) => {

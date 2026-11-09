@@ -195,8 +195,11 @@ export function buildPresetSessionRecord(
       rtMs:
         presetId === 'PERSONA_HIGH_BASELINE_AMNESTIC_SRB' || presetId === 'PERSONA_DLB_PAREIDOLIA'
           ? 1120 + i * 30
-          : 780 + i * 20,
-      isCorrect: i < 6
+          : 640 + i * 10,
+      isCorrect:
+        presetId === 'PERSONA_LVPPA_PHONOLOGICAL' || presetId === 'PERSONA_PCA_DORSAL'
+          ? true
+          : i < 6
     }))
   ];
   const s31Telemetry = computeWithinConditionSwitchMetrics(s31Trials, 1000, 20261108, 16.67, 112.0);
@@ -229,7 +232,7 @@ export function buildPresetSessionRecord(
           placedOrder: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
           sLetterFree: 6,
           sCuedTotal: 12,
-          auditoryPlacedOrder: [0, 1, 2, 3, 5, 4, 6, 7, 9, 8, 10, 11],
+          auditoryPlacedOrder: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
           famousStep1FreeNamingCorrect: 3, // Anomia / tip-of-the-tongue on Step 1 Free Naming
           famousStep2aVisualSemanticCorrect: 8, // Step 2A Visual Semantic intact
           famousStep2bVerbalClueCorrect: 8, // Step 2B Non-Visual Verbal Clue intact

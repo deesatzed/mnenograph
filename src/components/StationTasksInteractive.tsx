@@ -29,6 +29,7 @@ export interface StationTasksInteractiveProps {
   onUpdateStationTelemetry: (next: Partial<StationTelemetryMap>) => void;
   onSetSpotlightLocked: (locked: boolean) => void;
   onSelectStation: (stationId: StationId) => void;
+  onFinishAssessment?: () => void;
 }
 
 // Deterministic 30-trial pseudorandom DCCS sequence (23 repeat, 7 switch, no >2 consecutive switches)
@@ -52,7 +53,8 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   onAppendTrialEvent,
   onUpdateStationTelemetry,
   onSetSpotlightLocked,
-  onSelectStation
+  onSelectStation,
+  onFinishAssessment
 }) => {
   // Pause / Inactivity state (F9, Goldfish Priority 3.1)
   const [isPaused, setIsPaused] = useState<boolean>(false);
@@ -113,8 +115,11 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
   const [s33MaxSpan, setS33MaxSpan] = useState<number>(7);
   const [s34GerstmannTotal, setS34GerstmannTotal] = useState<number>(12);
 
-  // 60s / 120s Inactivity Auto-Pause Detector (F9)
+  // 60s Inactivity Auto-Pause Detector — only active while an interactive timed trial is running
   useEffect(() => {
+    if (!s03Running && !s11Running && !s31Running) {
+      return;
+    }
     let timer = window.setTimeout(() => {
       setIsPaused(true);
     }, 60000);
@@ -129,7 +134,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       window.removeEventListener('pointerdown', resetTimer);
       window.removeEventListener('keydown', resetTimer);
     };
-  }, []);
+  }, [s03Running, s11Running, s31Running]);
 
   const playCalibrationChime = () => {
     try {
@@ -180,20 +185,136 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
 
   const stationPrefix = activeStation.slice(0, 2);
 
+  const GUIDED_STEPS: {
+    prefix: string;
+    stationId: StationId;
+    stepNum: number;
+    shortTitle: string;
+    whatItTests: string;
+    howToUse: string;
+    done: boolean;
+  }[] = [
+    {
+      prefix: 'S0',
+      stationId: 'S0.3',
+      stepNum: 1,
+      shortTitle: 'Step 1: Calibration Dome',
+      whatItTests: 'Hearing, color-vision pattern safety, and 4-quadrant pointing speed baseline.',
+      howToUse:
+        'Verify your audio/visual checkboxes on the left, then click "Start Interactive Pointing Calibration" (or "Complete Full 36-Target Calibration" for an instant demo) on the right.',
+      done: Boolean(stationTelemetry['S0.3'])
+    },
+    {
+      prefix: 'S1',
+      stationId: 'S1.1',
+      stepNum: 2,
+      shortTitle: 'Step 2: Astrolabe Visual Loom',
+      whatItTests: 'Dorsal visual stream: Global-vs-Local shape integration and visual crowding (Posterior Cortical Atrophy screen).',
+      howToUse:
+        'First complete the 4-trial Practice Gate (or click Pass), then run the 8-trial Navon shape block and save the Diorama & Feature Match cards.',
+      done: Boolean(stationTelemetry['S1.1'])
+    },
+    {
+      prefix: 'S2',
+      stationId: 'S2.1',
+      stepNum: 3,
+      shortTitle: 'Step 3: Pareidolia Nebula',
+      whatItTests: 'Ventral visual stream: Illusory face/object perception in noise plates and rotated silhouettes (Lewy Body screen).',
+      howToUse:
+        'Record the noise-plate pareidolia count and foreshortened silhouette score, then click "Record S2.1 Pareidolia Telemetry".',
+      done: Boolean(stationTelemetry['S2.1'])
+    },
+    {
+      prefix: 'S3',
+      stationId: 'S3.1',
+      stepNum: 4,
+      shortTitle: 'Step 4: Constellation Switchboard',
+      whatItTests: 'Executive rule-switching speed (SCER) and trial-to-trial attentional stability (CoMAD).',
+      howToUse:
+        'Complete the 4-trial Practice Gate, then either play the live 30-trial Shape/Pattern matching game or click "Auto-Complete 30-Trial Valid Block".',
+      done: Boolean(stationTelemetry['S3.1'])
+    },
+    {
+      prefix: 'S4',
+      stationId: 'S4.1',
+      stepNum: 5,
+      shortTitle: 'Step 5: Echo Relay Spire',
+      whatItTests: 'Phonological working-memory loop and word-retrieval pauses (Logopenic PPA screen).',
+      howToUse:
+        'Tap the button each time a word starting with "F" is spoken (to log inter-word pause timing), then click "Save S4 Fluency & Echo Telemetry".',
+      done: Boolean(stationTelemetry['S4.1'])
+    },
+    {
+      prefix: 'S5',
+      stationId: 'S5.1',
+      stepNum: 6,
+      shortTitle: 'Step 6: Archive Memory Vault',
+      whatItTests: 'Visual vs. Auditory sequence memory, 4-choice cue rescue, and 3-step Famous-Face naming.',
+      howToUse:
+        'Review or adjust the Visual Sequence, Cued Recognition, Auditory Control, and Famous-Face scores, then click "Compute & Record S5 Memory" and "Finish & View Results Report".',
+      done: Boolean(stationTelemetry['S5.1'])
+    }
+  ];
+
+  const currentGuidedStep =
+    GUIDED_STEPS.find((s) => s.prefix === stationPrefix) ?? GUIDED_STEPS[0];
+
   return (
     <div
       data-testid="participant-task-surface"
       className="rounded-xl border border-slate-700/80 bg-[#12161F] p-5 text-slate-100 shadow-lg"
     >
-      {/* Top Participant Bar — Zero Numerical Scores Shown (No Test Anxiety Rule §5.1) */}
+      {/* 6-Step Interactive Progress Stepper */}
+      <div className="mb-4 pb-4 border-b border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+          <span className="text-xs font-bold uppercase tracking-wider text-sky-400">
+            Guided 6-Step Assessment Flow (Click Any Step or Follow Next &rarr;)
+          </span>
+          <span className="text-xs text-slate-400">
+            Completed Stations: <strong className="text-emerald-400">{GUIDED_STEPS.filter((s) => s.done).length} of 6</strong>
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {GUIDED_STEPS.map((st) => {
+            const isCurrent = st.prefix === stationPrefix;
+            return (
+              <button
+                key={st.prefix}
+                type="button"
+                onClick={() => onSelectStation(st.stationId)}
+                className={`px-3 py-2 rounded-lg text-left text-xs transition-all border cursor-pointer ${
+                  isCurrent
+                    ? 'bg-sky-950/90 border-sky-400 text-white shadow-sm'
+                    : st.done
+                    ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200 hover:bg-emerald-950/50'
+                    : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-1 font-bold">
+                  <span className="truncate">{st.shortTitle}</span>
+                  {st.done && <span className="text-emerald-400 shrink-0">✓</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Top Participant Bar — Zero Numerical Scores Shown */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3 mb-4">
-        <div>
+        <div className="max-w-3xl">
           <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-            Participant Task View • Zero Score-Anxiety Surface (18pt+ High-Contrast | Okabe-Ito Pattern-Safe)
+            Participant Task View • Zero Score-Anxiety Surface (High-Contrast | Okabe-Ito Pattern-Safe)
           </span>
           <h2 className="text-xl font-bold text-white mt-0.5">
-            Active Wing: {activeStation}
+            {currentGuidedStep.shortTitle} <span className="text-sm font-normal text-slate-400">({activeStation})</span>
           </h2>
+          <p className="text-xs text-slate-300 mt-1">
+            <strong className="text-sky-300">What this measures:</strong> {currentGuidedStep.whatItTests}
+          </p>
+          <p className="text-xs text-slate-300 mt-0.5">
+            <strong className="text-emerald-300">How to use:</strong> {currentGuidedStep.howToUse}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -216,7 +337,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             Session Paused — Take all the time you need.
           </p>
           <p className="text-sm text-slate-300 mt-1">
-            When you click <strong>Resume Activity</strong>, the current stimulus clock resets cleanly so pause duration never affects your response timing (<code>F9</code>).
+            When you click <strong>Resume Activity</strong>, the current stimulus clock resets cleanly so pause duration never affects your response timing.
           </p>
         </div>
       )}
@@ -228,15 +349,18 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             {/* S0.1 Informant & S0.2 Sensory Check */}
             <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-4 space-y-3">
               <h3 className="text-base font-bold text-sky-300">
-                S0.1 Partner Questionnaire & S0.2 Sensory / Pattern Verification (`F8`)
+                1A. Sensory Verification &amp; Brief Partner Checklist (S0.1 / S0.2)
               </h3>
+              <p className="text-xs text-slate-300">
+                Verifies speaker volume and color-blindness pattern clarity before starting timed visual and auditory tasks.
+              </p>
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={playCalibrationChime}
                   className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 text-xs font-semibold text-white cursor-pointer"
                 >
-                  🔊 Play 500 / 1000 / 2000 Hz Web Audio Calibration Chime (`S0.2`)
+                  🔊 Play 500 / 1000 / 2000 Hz Web Audio Test Chime (S0.2)
                 </button>
               </div>
               <label className="flex items-center gap-2.5 text-sm text-slate-200 cursor-pointer">
@@ -252,19 +376,10 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   className="w-4 h-4 accent-sky-400"
                 />
                 <span>
-                  <strong>S0.2 Hearing Check Passed</strong> (Spoken 3-Digit Calibration Audible; enables <code>S5.3</code> Auditory Control)
+                  <strong>Hearing Check Passed</strong> (Audio chime audible; enables Step 6 Auditory Sequence Control)
                 </span>
               </label>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={playCalibrationChime}
-                  className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 text-xs font-semibold text-white cursor-pointer"
-                >
-                  🔊 Play 500 / 1000 / 2000 Hz Web Audio Calibration Chime (`S0.2`)
-                </button>
-              </div>
               <label className="flex items-center gap-2.5 text-sm text-slate-200 cursor-pointer">
                 <input
                   type="checkbox"
@@ -278,21 +393,15 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                   className="w-4 h-4 accent-sky-400"
                 />
                 <span>
-                  <strong>S0.2 Redundant Pattern + Okabe-Ito Palette Verified</strong> (Horizontal Stripes vs. Crosshatch Grid)
+                  <strong>Pattern + Color-Safe Palette Verified</strong> (Horizontal Stripes vs. Crosshatch Grid clearly distinguishable)
                 </span>
               </label>
 
               <div className="pt-2 border-t border-slate-800 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={playCalibrationChime}
-                  className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 text-xs font-semibold text-white cursor-pointer"
-                >
-                  🔊 Play 500 / 1000 / 2000 Hz Web Audio Calibration Chime (`S0.2`)
-                </button>
-              </div>
-              <label className="flex items-center gap-2.5 text-sm text-slate-200 cursor-pointer">
+                <div className="text-xs font-semibold text-slate-400 uppercase">
+                  Optional Study-Partner / Symptom Screen (S0.1):
+                </div>
+                <label className="flex items-center gap-2.5 text-sm text-slate-200 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={informantRbdFlag}
@@ -309,20 +418,11 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                     className="w-4 h-4 accent-amber-400"
                   />
                   <span>
-                    <strong>S0.1 Informant Flag:</strong> Dream enactment (RBD) or intermittent visual illusions (<code>PMID: 42524732</code>)
+                    <strong>Symptom Note:</strong> Acting out dreams during sleep (RBD) or brief visual illusions
                   </span>
                 </label>
 
-                <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={playCalibrationChime}
-                  className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 text-xs font-semibold text-white cursor-pointer"
-                >
-                  🔊 Play 500 / 1000 / 2000 Hz Web Audio Calibration Chime (`S0.2`)
-                </button>
-              </div>
-              <label className="flex items-center gap-2.5 text-sm text-slate-200 cursor-pointer">
+                <label className="flex items-center gap-2.5 text-sm text-slate-200 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={informantDressingFlag}
@@ -339,7 +439,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
                     className="w-4 h-4 accent-purple-400"
                   />
                   <span>
-                    <strong>S0.1 Informant Flag:</strong> Difficulty finding objects in plain view or sleeve/dressing orientation (PCA screen)
+                    <strong>Symptom Note:</strong> Difficulty spotting objects in plain view or orienting sleeves when dressing
                   </span>
                 </label>
               </div>
@@ -349,14 +449,14 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold text-sky-300">
-                  S0.3 36-Target Quadrant Motor Baseline (`F10d`)
+                  1B. 4-Quadrant Motor &amp; Visual Field Baseline (S0.3)
                 </h3>
                 <span className="text-xs text-slate-400">
-                  {s03Running ? `Target ${s03TrialIdx + 1} / 8 Quick Demo` : '45s Calibration'}
+                  {s03Running ? `Target ${s03TrialIdx + 1} / 8 Quick Demo` : stationTelemetry['S0.3'] ? '✓ Baseline Recorded' : '45s Calibration'}
                 </span>
               </div>
               <p className="text-sm text-slate-300">
-                Measures device/motor baseline latency (RT_motor), pointer path efficiency (η_path), and Kruskal-Wallis H across Quadrants Q1–Q4.
+                Measures baseline pointing speed (RT_motor), pointer path smoothness, and checks whether all 4 screen quadrants (Q1–Q4) have equal response speed.
               </p>
               {!s03Running ? (
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -1274,10 +1374,71 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
             }}
             className="min-h-11 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm cursor-pointer"
           >
-            Compute & Record S5 Memory, Famous-Photo & Modality Discrepancy Telemetry
+            Compute &amp; Record S5 Memory, Famous-Photo &amp; Modality Discrepancy Telemetry
           </button>
         </div>
       )}
+
+      {/* Guided Step-by-Step Navigation Footer */}
+      {(() => {
+        const WING_ORDER: { id: StationId; label: string }[] = [
+          { id: 'S0.3', label: 'Step 1 of 6: Wing 0 Calibration' },
+          { id: 'S1.1', label: 'Step 2 of 6: Wing I Visual Loom' },
+          { id: 'S2.1', label: 'Step 3 of 6: Wing II Pareidolia' },
+          { id: 'S3.1', label: 'Step 4 of 6: Wing III Switchboard' },
+          { id: 'S4.1', label: 'Step 5 of 6: Wing IV Echo Spire' },
+          { id: 'S5.1', label: 'Step 6 of 6: Wing V Archive Vault' }
+        ];
+        const currentIdx = Math.max(
+          0,
+          WING_ORDER.findIndex((w) => w.id.slice(0, 2) === activeStation.slice(0, 2))
+        );
+        const prevWing = currentIdx > 0 ? WING_ORDER[currentIdx - 1] : null;
+        const nextWing = currentIdx < WING_ORDER.length - 1 ? WING_ORDER[currentIdx + 1] : null;
+
+        return (
+          <div className="mt-6 pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {prevWing && (
+                <button
+                  type="button"
+                  onClick={() => onSelectStation(prevWing.id)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 cursor-pointer"
+                >
+                  &larr; Previous ({prevWing.label})
+                </button>
+              )}
+              <span className="text-xs font-semibold text-slate-400">
+                Current Position: <strong className="text-sky-300">{WING_ORDER[currentIdx]?.label}</strong>
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              {nextWing ? (
+                <button
+                  type="button"
+                  data-testid="next-station-btn"
+                  onClick={() => onSelectStation(nextWing.id)}
+                  className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-sm shadow-sm cursor-pointer"
+                >
+                  Continue to {nextWing.label} &rarr;
+                </button>
+              ) : null}
+
+              {onFinishAssessment && (
+                <button
+                  type="button"
+                  data-testid="finish-view-results-btn"
+                  onClick={onFinishAssessment}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-sm cursor-pointer"
+                >
+                  Finish &amp; View Results Report &rarr;
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

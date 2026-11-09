@@ -129,7 +129,7 @@ export const ResearcherTelemetryHud: React.FC<ResearcherTelemetryHudProps> = ({
                 : 'bg-slate-900 text-slate-300 border border-slate-800 hover:border-slate-600'
             }`}
           >
-            1. Raw Telemetry & 2-Layer Router
+            1. Raw Telemetry &amp; Syndrome Router
           </button>
           <button
             type="button"
@@ -140,7 +140,7 @@ export const ResearcherTelemetryHud: React.FC<ResearcherTelemetryHudProps> = ({
                 : 'bg-slate-900 text-slate-300 border border-slate-800 hover:border-slate-600'
             }`}
           >
-            2. Multi-Visit z_SRB & Burst Explorer (`F4`)
+            2. Multi-Visit Longitudinal Change (z_SRB)
           </button>
           <button
             type="button"
@@ -151,7 +151,7 @@ export const ResearcherTelemetryHud: React.FC<ResearcherTelemetryHudProps> = ({
                 : 'bg-slate-900 text-slate-300 border border-slate-800 hover:border-slate-600'
             }`}
           >
-            3. Living Evidence & Protocol Registry (`§7`)
+            3. 2026 Living Evidence &amp; Rule Toggles
           </button>
           <button
             type="button"
@@ -162,7 +162,7 @@ export const ResearcherTelemetryHud: React.FC<ResearcherTelemetryHudProps> = ({
                 : 'bg-slate-900 text-slate-300 border border-slate-800 hover:border-slate-600'
             }`}
           >
-            4. Immutable Event Log & JSON Export
+            4. Immutable Event Log &amp; JSON Export
           </button>
         </div>
       </div>
@@ -276,11 +276,11 @@ export const ResearcherTelemetryHud: React.FC<ResearcherTelemetryHudProps> = ({
             </div>
           </div>
 
-          {/* Two-Layer Syndrome Profile & Heuristic Routing Log (F11) */}
+          {/* Two-Layer Syndrome Profile & Heuristic Routing Log */}
           <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-sky-300 uppercase tracking-wider">
-                Two-Layer Convergent Router & Holm-Bonferroni FWER Output (`F11`)
+                Two-Layer Convergent Syndrome Router &amp; Holm-Bonferroni Output
               </h3>
               <span className="text-xs px-2.5 py-0.5 rounded bg-amber-950/60 border border-amber-500/40 text-amber-200 font-semibold">
                 [PROPOSED / UNVALIDATED — DESIGN TARGET]

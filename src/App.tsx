@@ -25,6 +25,7 @@ import {
 import { CelestialObservatory3D } from './components/CelestialObservatory3D';
 import { StationTasksInteractive } from './components/StationTasksInteractive';
 import { ResearcherTelemetryHud } from './components/ResearcherTelemetryHud';
+import { AssessmentResultsReport } from './components/AssessmentResultsReport';
 import { evaluateTwoLayerSyndromeRouter } from './psychometrics/psychometrics';
 
 export const App: React.FC = () => {
@@ -40,7 +41,8 @@ export const App: React.FC = () => {
     'OBSERVATORY_3D_SPOTLIGHT_LOCK'
   );
   const [spotlightLocked, setSpotlightLocked] = useState<boolean>(false);
-  const [activeStation, setActiveStation] = useState<StationId>('S3.1');
+  const [activeStation, setActiveStation] = useState<StationId>('S0.3');
+  const [showResultsReport, setShowResultsReport] = useState<boolean>(false);
   const [showResearcherHud, setShowResearcherHud] = useState<boolean>(true);
 
   const [session, setSession] = useState<SessionRecord>(() =>
@@ -61,6 +63,21 @@ export const App: React.FC = () => {
     );
     nextRecord.motionOff = singleTrialMode === 'PLAIN_STATIC_2D' || spotlightLocked;
     setSession(nextRecord);
+    // Automatically show the Plain-English Assessment Results Report when a Simulated Patient Persona is selected
+    setShowResultsReport(presetId !== 'LIVE_PARTICIPANT');
+    if (presetId === 'LIVE_PARTICIPANT') {
+      setActiveStation('S0.3');
+    }
+  };
+
+  const handleStartNewGuidedTest = () => {
+    setSelectedPreset('LIVE_PARTICIPANT');
+    const freshRecord = buildPresetSessionRecord('LIVE_PARTICIPANT', lockedManifest);
+    freshRecord.presentationMode = singleTrialMode;
+    freshRecord.motionOff = singleTrialMode === 'PLAIN_STATIC_2D' || spotlightLocked;
+    setSession(freshRecord);
+    setActiveStation('S0.3');
+    setShowResultsReport(false);
   };
 
   const handleTogglePresentationMode = () => {
@@ -222,6 +239,43 @@ export const App: React.FC = () => {
 
       {/* Main Content Container */}
       <main className="max-w-7xl w-full mx-auto px-4 py-3 space-y-4 flex-1">
+        {/* Guided Workflow Action Bar — Answers "How do I start a new test or see results?" */}
+        <div className="rounded-xl bg-slate-900/90 border border-sky-500/40 px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-md">
+          <div className="text-xs text-slate-200 max-w-2xl">
+            <div className="font-bold text-sky-300 uppercase tracking-wider mb-0.5">
+              How to Use This Prototype (3 Connected Layers)
+            </div>
+            <div>
+              <strong>1. Start a New Guided Test:</strong> Walk through Steps 1&rarr;6 in order •{' '}
+              <strong>2. View Results Report:</strong> Plain-English summary of all 6 cognitive domains •{' '}
+              <strong>3. Simulated Cases:</strong> Pick any <code>[SIMULATED]</code> persona in the top dropdown to inspect a pre-recorded clinical profile.
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              data-testid="start-new-test-btn"
+              onClick={handleStartNewGuidedTest}
+              className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-sm cursor-pointer"
+            >
+              + Start New Guided Test (Step 1 of 6)
+            </button>
+            <button
+              type="button"
+              data-testid="view-results-report-btn"
+              onClick={() => setShowResultsReport((v) => !v)}
+              className={`px-4 py-2 rounded-xl font-bold text-xs border transition-colors cursor-pointer ${
+                showResultsReport
+                  ? 'bg-emerald-600 border-emerald-300 text-white'
+                  : 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/60 text-emerald-200'
+              }`}
+            >
+              {showResultsReport ? 'Hide Results Report' : 'View Results Report & Scorecards'}
+            </button>
+          </div>
+        </div>
+
         {/* Clinical Vignette / Persona Summary Banner */}
         <div className="rounded-xl bg-slate-900/70 border border-slate-800 px-4 py-2.5 text-xs text-slate-200 flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -229,6 +283,21 @@ export const App: React.FC = () => {
             {activePersonaMeta.clinicalVignette}
           </div>
         </div>
+
+        {/* Plain-English Assessment Results Report (Shown automatically on Simulated Personas or when Finish/View Results is clicked) */}
+        {showResultsReport && (
+          <AssessmentResultsReport
+            session={session}
+            manifest={sandboxManifest}
+            onStartNewTest={handleStartNewGuidedTest}
+            onReviewStation={(st) => {
+              setActiveStation(st);
+              setShowResultsReport(false);
+            }}
+            onToggleResearcherHud={() => setShowResearcherHud((v) => !v)}
+            showResearcherHud={showResearcherHud}
+          />
+        )}
 
         {/* 1. 3D Celestial Observatory / Plain Static Viewport */}
         <CelestialObservatory3D
@@ -252,6 +321,7 @@ export const App: React.FC = () => {
           onUpdateStationTelemetry={handleUpdateStationTelemetry}
           onSetSpotlightLocked={setSpotlightLocked}
           onSelectStation={setActiveStation}
+          onFinishAssessment={() => setShowResultsReport(true)}
         />
 
         {/* 3. Researcher / Judge Telemetry HUD */}
