@@ -5,10 +5,14 @@ import type {
   TrialEvent
 } from '../types/sessionSchema';
 import {
+  analyzeRobustRtDistribution,
+  computeDemographicNormedScore,
   computeNavonGlobalLocalMetrics,
   computeQuadrantKruskalWallis,
   computeSequenceAndAssociativeScores,
-  computeWithinConditionSwitchMetrics
+  computeWithinConditionSwitchMetrics,
+  type DemographicProfileInput,
+  type RawRtSampleInput
 } from '../psychometrics/psychometrics';
 
 export type Suit = '♠' | '♥' | '♦' | '♣';
@@ -25,6 +29,8 @@ export interface BlackjackCard {
 
 export interface HandRecord {
   handNumber: number;
+  isAnchorHand: boolean;
+  anchorPassNumber: 1 | 2 | 3 | null;
   decisionRtMs: number;
   playerFinalTotal: number;
   dealerFinalTotal: number;
@@ -38,19 +44,32 @@ export interface HandRecord {
   betPlacementRtMs: number;
   sideRuleCondition: 'repeat' | 'switch';
   sideRuleCorrect: boolean;
+  // Distraction / Artifact Censoring Flags
+  isPausedOrBlurred: boolean;
+  postPauseWarmup: boolean;
+  pointerIdleDuringTrial: boolean;
 }
 
 export interface SavedBlackjackSessionSummary {
   sessionId: string;
   timestampIso: string;
+  ageYears: number;
+  educationYears: number;
   handsPlayed: number;
+  validEngagedHands: number;
+  censoredDistractionHands: number;
   elapsedSec: number;
   finalBankroll: number;
-  meanDecisionRtMs: number;
-  rtCvPct: number;
+  medianDecisionRtMs: number;
+  seMedianRtMs: number;
+  madRtMs: number;
+  bowleySkewness: number;
+  moorsKurtosisExcess: number;
+  exGaussianTauMs: number;
   mathOptimalRate: number;
   upsideDownDetectionRate: number;
-  delayedRecallRate: number;
+  compositeDemoZ: number;
+  compositePercentile: number;
   clockNoonErrorDeg: number | null;
   clockDurationSec: number | null;
 }
@@ -105,8 +124,9 @@ export function evaluateBlackjackHand(cards: BlackjackCard[]): {
 }
 
 /**
- * Evaluates whether the player's action (HIT vs STAND vs DOUBLE) is reasonable/optimal
- * in Blackjack (used silently to track numerical & executive consistency across hands).
+ * Evaluates whether the player's action (HIT vs STAND vs DOUBLE) is mathematically sound
+ * in Blackjack (used silently to track numerical & executive consistency across hands,
+ * while separating conservative vs. aggressive risk preference on borderline 15-16 totals).
  */
 export function isActionMathematicallySound(
   playerCards: BlackjackCard[],
@@ -118,10 +138,11 @@ export function isActionMathematicallySound(
 
   // Never hit on hard 18+
   if (!isSoft && total >= 18 && action === 'HIT') return false;
-  // Never stand on hard 11 or less
+  // Never stand on hard 11 or less (or soft 15 or less)
   if (total <= 11 && action === 'STAND') return false;
-  // Against dealer 7..11, standing on hard 12..15 is suboptimal
-  if (!isSoft && total >= 12 && total <= 15 && dealerVal >= 7 && action === 'STAND') {
+  if (isSoft && total <= 15 && action === 'STAND') return false;
+  // Against dealer 7..11, standing on hard 12..14 is clearly suboptimal
+  if (!isSoft && total >= 12 && total <= 14 && dealerVal >= 7 && action === 'STAND') {
     return false;
   }
   // Against dealer 2..6 (bust cards), hitting on hard 17+ is suboptimal
@@ -149,7 +170,6 @@ function buildShuffledShoe(seedOffset = 0): BlackjackCard[] {
       }
     }
   }
-  // Fisher-Yates shuffle
   let seed = 20261109 + seedOffset * 7919 + Math.floor(performance.now() % 1000);
   for (let i = deck.length - 1; i > 0; i--) {
     seed = (seed * 1664525 + 1013904223) % 4294967296;
@@ -164,8 +184,7 @@ function buildShuffledShoe(seedOffset = 0): BlackjackCard[] {
 /**
  * Renders an authentic playing card with real asymmetric center pip patterns for
  * A, 3, 5, 7, 9 so that an upside-down (180°) card is genuinely recognizable by
- * its upside-down pip geometry and inverted top-left/bottom-right indices—without
- * any artificial label telling the player it's upside down!
+ * its upside-down pip geometry and inverted top-left/bottom-right indices.
  */
 export const AuthenticBlackjackCardView: React.FC<{
   card: BlackjackCard;
@@ -185,12 +204,10 @@ export const AuthenticBlackjackCardView: React.FC<{
       ? 'w-20 h-28 p-1.5 rounded-xl'
       : 'w-24 h-34 p-2 rounded-xl';
 
-  // Render authentic asymmetric pip layout in the center of the card
   const renderCenterPips = () => {
     if (card.rank === '7') {
-      // Authentic 7: 2 columns of 3 + 1 extra pip in the TOP center!
-      // When upside down (180°), that 7th center pip is at the BOTTOM instead of the TOP
-      // and all heart/spade points face the opposite direction!
+      // Authentic 7 of Hearts / Spades: 2 columns of 3 + 1 extra pip in the TOP center!
+      // When rotated 180°, that 7th center pip is at the BOTTOM instead of the TOP!
       return (
         <svg viewBox="0 0 60 76" className="w-12 h-15">
           <text x="15" y="18" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
@@ -199,7 +216,6 @@ export const AuthenticBlackjackCardView: React.FC<{
           <text x="45" y="18" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
           <text x="45" y="40" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
           <text x="45" y="62" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
-          {/* Asymmetric top-center 7th pip */}
           <text x="30" y="27" fontSize="15" fill={pipFill} textAnchor="middle">{card.suit}</text>
         </svg>
       );
@@ -239,7 +255,6 @@ export const AuthenticBlackjackCardView: React.FC<{
           : 'border-slate-300 hover:border-amber-400'
       }`}
     >
-      {/* Top-Left Index (Standard Upright Index — Bottom-Right has a subtle deck crown) */}
       <div className={`flex items-center justify-between w-full leading-none font-extrabold ${textColor}`}>
         <span className={size === 'sm' ? 'text-xs' : 'text-sm'}>
           {card.rank}{card.suit}
@@ -247,12 +262,10 @@ export const AuthenticBlackjackCardView: React.FC<{
         <span className="text-[9px] font-bold text-slate-400">▲</span>
       </div>
 
-      {/* Center Pips */}
       <div className="my-auto flex items-center justify-center">
         {renderCenterPips()}
       </div>
 
-      {/* Bottom Edge Base Strip (Makes 0° vs 180° orientation fair & unambiguous even for symmetric suits like ♦) */}
       <div className="flex items-center justify-between w-full text-[9px] font-bold text-slate-500 border-t border-slate-200 pt-0.5">
         <span>21 CLUB</span>
         <span>{card.rank}</span>
@@ -270,7 +283,7 @@ interface BlackjackFiveMinGameProps {
   onFinishSession: () => void;
 }
 
-const STORAGE_KEY = 'postcircecd_blackjack_sessions_v1';
+const STORAGE_KEY = 'postcircecd_blackjack_sessions_v2';
 
 export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   presentationMode,
@@ -278,10 +291,21 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   onUpdateStationTelemetry,
   onFinishSession
 }) => {
+  // Demographic & Premorbid Cognitive Reserve Baseline Profile
+  const [demoProfile, setDemoProfile] = useState<DemographicProfileInput>({
+    ageYears: 72,
+    educationYears: 16, // 12=High School, 14=Some College/Trade, 16=Bachelor's, 18=Master's, 20=MD/JD/PhD
+    gameFamiliarity: 'MODERATE'
+  });
+
   // 5-Minute (300 second) Shoe Clock
-  const TARGET_SHOE_SECONDS = 300;
   const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+
+  // Real-World Distraction / Window Blur / Post-Pause Re-Orientation State
+  const [hadInterruptionThisHand, setHadInterruptionThisHand] = useState<boolean>(false);
+  const [isPostPauseWarmupHand, setIsPostPauseWarmupHand] = useState<boolean>(false);
+  const lastPointerActivityRef = useRef<number>(performance.now());
 
   // Shoe & Bankroll State
   const [shoe, setShoe] = useState<BlackjackCard[]>(() => buildShuffledShoe(1));
@@ -290,18 +314,12 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [doublePayoutActive, setDoublePayoutActive] = useState<boolean>(false);
   const [handNumber, setHandNumber] = useState<number>(1);
 
-  // Table Phase:
-  // - 'PLACE_CORNER_BET': Tap one of the 4 corner chip stacks (Q1, Q2, Q3, Q4) to deal the hand
-  // - 'PLAYER_TURN': Hit, Stand, Double Down (and optionally tap any upside-down card on the felt or claim Side-Rule Bonus!)
-  // - 'HAND_RESULT': Shows Dealer draw & payout, then advances to next hand (or triggers Cut-Card / Happy Hour Clock bonus)
-  // - 'CUT_CARD_BONUS': Every 3rd hand, quick Discard-Tray Sequence + Delayed Tablemate Lucky Card check
-  // - 'PIT_CLOCK_NOON_BONUS': At Hand 4 (or on click), 30-second Blank Clock at Noon with NO progress bar for 2x Payouts!
+  // Table Stages (NO interrupting quiz popups! Only continuous Blackjack + optional 30s Happy Hour Clock!)
   const [tableStage, setTableStage] = useState<
     | 'WARMUP_INTRO'
     | 'PLACE_CORNER_BET'
     | 'PLAYER_TURN'
     | 'HAND_RESULT'
-    | 'CUT_CARD_BONUS'
     | 'PIT_CLOCK_NOON_BONUS'
   >('WARMUP_INTRO');
 
@@ -309,7 +327,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [dealerHand, setDealerHand] = useState<BlackjackCard[]>([]);
   const [dealerHoleRevealed, setDealerHoleRevealed] = useState<boolean>(false);
   const [handBanner, setHandBanner] = useState<string>(
-    'Welcome to the 5-Minute Blackjack 21 Table! Tap a Corner Chip to Deal Hand #1.'
+    'Welcome to the 5-Minute Blackjack 21 Table! Tap the Glowing Corner Chip to Deal Hand #1.'
   );
 
   // Silent Surrogate 1: Upside-down card tracking on the current hand
@@ -324,35 +342,22 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const cornerOnsetRef = useRef<number>(performance.now());
   const handOnsetRef = useRef<number>(performance.now());
 
-  // Silent Surrogate 3: Table Side-Bonus Rule (Alternates every 2 hands between SUIT MATCH vs RED-GOLD 7/14/21)
+  // Silent Surrogate 3: Table Side-Bonus Rule (Alternates between SUIT_MATCH & SEVEN_LUCK)
   const [sideRuleMode, setSideRuleMode] = useState<'SUIT_MATCH' | 'SEVEN_LUCK'>('SUIT_MATCH');
   const [sideRuleClaimed, setSideRuleClaimed] = useState<boolean>(false);
   const [prevSideRuleMode, setPrevSideRuleMode] = useState<'SUIT_MATCH' | 'SEVEN_LUCK'>('SUIT_MATCH');
 
-  // Silent Surrogate 4: Delayed Tablemate Lucky Card & Discard Tray Sequence (Tested after 3 hands of real interference!)
-  const TABLEMATE_POOL = [
-    {
-      seatLabel: 'Left Seat (Sam the Captain)',
-      card: { id: 'tm-sam', rank: '7', suit: '♥' as Suit, suitName: 'Hearts' as const, value: 7 },
-      label: '7 of Hearts (7♥)',
-      cueHint: 'Hint: It was a red Heart card worth 7 points.'
-    },
-    {
-      seatLabel: 'Right Seat (Clara the Baker)',
-      card: { id: 'tm-clara', rank: 'K', suit: '♠' as Suit, suitName: 'Spades' as const, value: 10 },
-      label: 'King of Spades (K♠)',
-      cueHint: 'Hint: It was a royal black Spade face card.'
-    }
-  ];
-  const [cutCardStep, setCutCardStep] = useState<'DISCARD_ORDER' | 'DELAYED_SEAT_FREE' | 'DELAYED_SEAT_CUED'>('DISCARD_ORDER');
-  const [discardTargetCards, setDiscardTargetCards] = useState<BlackjackCard[]>([]);
-  const [discardChoices, setDiscardChoices] = useState<BlackjackCard[]>([]);
-  const [discardPickedIds, setDiscardPickedIds] = useState<string[]>([]);
-  const [sequenceCorrectCount, setSequenceCorrectCount] = useState<number>(0);
-  const [sequenceTotalCount, setSequenceTotalCount] = useState<number>(0);
-  const [delayedFreeHits, setDelayedFreeHits] = useState<number>(0);
-  const [delayedCuedHits, setDelayedCuedHits] = useState<number>(0);
-  const [delayedTotalChecks, setDelayedTotalChecks] = useState<number>(0);
+  // Silent Surrogate 4 (ZERO POPUPS!): Live On-Felt Discard Tray "Snap Match" & "Peek Discard"
+  // Instead of interrupting play with a memory quiz screen, the Discard Tray sits on the felt:
+  // If any card in the current hand matches the rank of the previous hand's top discard, the player
+  // can tap "🔔 Snap Discard Match (+$50)"! And if they forget what was discarded, they can tap
+  // "👁️ Peek Discard" (a natural assistive feature whose usage is quietly logged!).
+  const [lastDiscardTopCard, setLastDiscardTopCard] = useState<BlackjackCard | null>(null);
+  const [discardPeekOpen, setDiscardPeekOpen] = useState<boolean>(false);
+  const [discardPeekCount, setDiscardPeekCount] = useState<number>(0);
+  const [discardSnapHits, setDiscardSnapHits] = useState<number>(0);
+  const [discardSnapOpportunities, setDiscardSnapOpportunities] = useState<number>(0);
+  const [discardSnapClaimedThisHand, setDiscardSnapClaimedThisHand] = useState<boolean>(false);
 
   // Silent Surrogate 5: Mid-Shoe Pit Boss Clock Bonus (Blank Clock at Noon, NO progress bar!)
   const HOURS_ORDER = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
@@ -374,6 +379,30 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     }
   });
 
+  // Track window blur / visibility change & pointer activity to separate external clinic distractions from cognitive lapses
+  useEffect(() => {
+    const onPointerActivity = () => {
+      lastPointerActivityRef.current = performance.now();
+    };
+    const onVisibilityOrBlur = () => {
+      if (document.hidden) {
+        setHadInterruptionThisHand(true);
+      }
+    };
+    window.addEventListener('pointerdown', onPointerActivity);
+    window.addEventListener('pointermove', onPointerActivity);
+    window.addEventListener('keydown', onPointerActivity);
+    document.addEventListener('visibilitychange', onVisibilityOrBlur);
+    window.addEventListener('blur', onVisibilityOrBlur);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerActivity);
+      window.removeEventListener('pointermove', onPointerActivity);
+      window.removeEventListener('keydown', onPointerActivity);
+      document.removeEventListener('visibilitychange', onVisibilityOrBlur);
+      window.removeEventListener('blur', onVisibilityOrBlur);
+    };
+  }, []);
+
   // 5-Minute Shoe Wall-Clock Timer
   useEffect(() => {
     if (tableStage === 'WARMUP_INTRO' || isPaused) return;
@@ -389,70 +418,90 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // Recompute live psychometric metrics whenever a hand finishes
-  const liveSummary = useMemo(() => {
-    const n = handRecords.length;
-    if (n === 0) {
-      return {
-        handsPlayed: 0,
-        meanRtMs: 0,
-        rtCvPct: 0,
-        mathOptimalRate: 100,
-        upsideDownDetectionRate: 100,
-        upsideDownOpportunities: 0,
-        upsideDownSpotted: 0,
-        qMedians: { Q1: 0, Q2: 0, Q3: 0, Q4: 0 }
-      };
-    }
-    const rts = handRecords.map((h) => h.decisionRtMs);
-    const meanRt = rts.reduce((a, b) => a + b, 0) / n;
-    const variance = rts.reduce((acc, v) => acc + Math.pow(v - meanRt, 2), 0) / n;
-    const sd = Math.sqrt(variance);
-    const rtCvPct = meanRt > 0 ? (sd / meanRt) * 100 : 0;
+  // Compute Robust RT Distribution Moments (Median, Q10, MAD, IQR, Bowley Skewness, Moors Kurtosis, Ex-Gaussian Mu/Sigma/Tau)
+  // and Age + Education Normative Z-scores!
+  const telemetryAnalytics = useMemo(() => {
+    const rawSamples: RawRtSampleInput[] = handRecords.map((h) => ({
+      trialNumber: h.handNumber,
+      rtMs: h.decisionRtMs,
+      isCorrect: h.mathOptimalDecision,
+      isPausedOrBlurred: h.isPausedOrBlurred,
+      postPauseWarmup: h.postPauseWarmup,
+      technicalFrameDrop: false,
+      pointerIdleDuringTrial: h.pointerIdleDuringTrial
+    }));
 
+    const dist = analyzeRobustRtDistribution(rawSamples);
+
+    const n = handRecords.length;
     const mathHits = handRecords.filter((h) => h.mathOptimalDecision).length;
+    const mathRatePct = n > 0 ? Math.round((mathHits / n) * 100) : 100;
+
     const udOpps = handRecords.filter((h) => h.upsideDownPresent).length;
     const udSpotted = handRecords.filter((h) => h.upsideDownPresent && h.upsideDownSpotted).length;
+    const udRatePct = udOpps > 0 ? Math.round((udSpotted / udOpps) * 100) : 100;
 
+    // 4-Corner Bet Quadrant MEDIANS (never means!)
     const byQ: Record<'Q1' | 'Q2' | 'Q3' | 'Q4', number[]> = { Q1: [], Q2: [], Q3: [], Q4: [] };
     for (const h of handRecords) {
-      byQ[h.betQuadrant].push(h.betPlacementRtMs);
+      if (!h.isPausedOrBlurred && !h.postPauseWarmup) {
+        byQ[h.betQuadrant].push(h.betPlacementRtMs);
+      }
     }
-    const avg = (arr: number[]) =>
-      arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+    const med = (arr: number[]) => {
+      if (arr.length === 0) return 0;
+      const s = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return Math.round(s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2);
+    };
+
+    // Implicit Memory Savings across Fixed Anchor Hands (Hand #2 vs Hand #6)
+    const anchor1 = handRecords.find((h) => h.anchorPassNumber === 1 && !h.isPausedOrBlurred);
+    const anchor2 = handRecords.find((h) => h.anchorPassNumber === 2 && !h.isPausedOrBlurred);
+    const implicitSavingsMs =
+      anchor1 && anchor2 ? Math.round(anchor1.decisionRtMs - anchor2.decisionRtMs) : null;
+
+    const demoNorms = computeDemographicNormedScore(demoProfile, {
+      medianRtMs: dist.medianRtMs || 1150,
+      exGaussianTauMs: dist.exGaussianTauMs || 180,
+      bowleySkewness: dist.bowleyQuantileSkewness,
+      mathOptimalRatePct: mathRatePct,
+      upsideDownDetectionRatePct: udRatePct
+    });
 
     return {
+      dist,
       handsPlayed: n,
-      meanRtMs: Math.round(meanRt),
-      rtCvPct: Number(rtCvPct.toFixed(1)),
-      mathOptimalRate: Math.round((mathHits / n) * 100),
-      upsideDownDetectionRate: udOpps > 0 ? Math.round((udSpotted / udOpps) * 100) : 100,
+      mathOptimalRatePct: mathRatePct,
       upsideDownOpportunities: udOpps,
       upsideDownSpotted: udSpotted,
+      upsideDownDetectionRatePct: udRatePct,
+      implicitSavingsMs,
       qMedians: {
-        Q1: avg(byQ.Q1),
-        Q2: avg(byQ.Q2),
-        Q3: avg(byQ.Q3),
-        Q4: avg(byQ.Q4)
-      }
+        Q1: med(byQ.Q1),
+        Q2: med(byQ.Q2),
+        Q3: med(byQ.Q3),
+        Q4: med(byQ.Q4)
+      },
+      demoNorms
     };
-  }, [handRecords]);
+  }, [handRecords, demoProfile]);
 
   // Synchronize live Blackjack telemetry into the main PostCircECD StationTelemetryMap
   const syncAllTelemetryToApp = (
     records: HandRecord[],
-    seqHits: number,
-    seqTotal: number,
-    freeHits: number,
-    cuedHits: number,
-    delayedTotal: number,
+    snapHits: number,
+    snapOpps: number,
+    peekCnt: number,
     clkSec: number | null,
     clkErrDeg: number | null
   ) => {
     if (records.length === 0) return;
 
-    // 1. S0.3 Peripheral 4-Corner Bet Latency Balance
-    const qTrials = records.map((r) => ({
+    const engaged = records.filter((r) => !r.isPausedOrBlurred && !r.postPauseWarmup);
+    if (engaged.length === 0) return;
+
+    const qTrials = engaged.map((r) => ({
       quadrant: r.betQuadrant,
       rtMs: r.betPlacementRtMs,
       euclideanDistancePx: 140,
@@ -461,8 +510,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     const paddedQ = [...qTrials, ...qTrials, ...qTrials, ...qTrials];
     const s03 = computeQuadrantKruskalWallis(paddedQ, Math.max(30, elapsedSec));
 
-    // 2. S1.1 Crowding & Orientation (2-card vs 3+ card hands & upside-down card detection)
-    const navonTrials = records.map((r) => ({
+    const navonTrials = engaged.map((r) => ({
       level: (r.upsideDownPresent ? 'local' : 'global') as 'global' | 'local',
       crowded: r.upsideDownPresent,
       rtMs: r.upsideDownFlipRtMs ?? r.decisionRtMs,
@@ -473,8 +521,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       Math.max(45, elapsedSec)
     );
 
-    // 3. S3.1 Executive Rule Shift & Soft-Ace Flexibility
-    const switchTrials = records.map((r) => ({
+    const switchTrials = engaged.map((r) => ({
       condition: r.sideRuleCondition,
       rtMs: r.decisionRtMs,
       isCorrect: r.mathOptimalDecision,
@@ -487,31 +534,26 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       20261109
     );
 
-    // 4. S5.1 Discard Sequence & Multi-Hand Delayed Recall
-    const placedOrder =
-      seqTotal > 0 && seqHits === seqTotal
-        ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-        : [0, 2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-    const sLetterFree = Math.min(12, Math.max(4, delayedTotal > 0 ? Math.round((freeHits / delayedTotal) * 12) : 10));
-    const sCuedTotal = Math.min(12, Math.max(sLetterFree, delayedTotal > 0 ? Math.round(((freeHits + cuedHits) / delayedTotal) * 12) : 12));
+    const freeSuccess = snapOpps > 0 ? Math.min(12, Math.max(4, Math.round((snapHits / snapOpps) * 12))) : 10;
+    const cuedSuccess = Math.min(12, Math.max(freeSuccess, freeSuccess + Math.min(4, peekCnt)));
     const s5Metrics = computeSequenceAndAssociativeScores({
-      placedOrder,
-      sLetterFree,
-      sCuedTotal,
+      placedOrder: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      sLetterFree: freeSuccess,
+      sCuedTotal: cuedSuccess,
       auditoryPlacedOrder: null
     });
 
-    const udTotal = records.filter((x) => x.upsideDownPresent).length;
-    const udHits = records.filter((x) => x.upsideDownPresent && x.upsideDownSpotted).length;
+    const udTotal = engaged.filter((x) => x.upsideDownPresent).length;
+    const udHits = engaged.filter((x) => x.upsideDownPresent && x.upsideDownSpotted).length;
     const clockHandsScore = clkErrDeg !== null && clkErrDeg <= 25 ? 4 : 3;
 
     onUpdateStationTelemetry({
       'S0.3': s03,
       'S1.1': s11,
       'S1.3': {
-        arraysCompleted90s: records.length,
-        maxComplexityReached: Math.min(10, 4 + Math.floor(records.length / 2)),
-        accuracyRate: Number((records.filter((x) => x.mathOptimalDecision).length / records.length).toFixed(2)),
+        arraysCompleted90s: engaged.length,
+        maxComplexityReached: Math.min(10, 4 + Math.floor(engaged.length / 2)),
+        accuracyRate: Number((engaged.filter((x) => x.mathOptimalDecision).length / engaged.length).toFixed(2)),
         measuredDurationSec: Math.max(45, elapsedSec)
       },
       'S2.1': {
@@ -529,7 +571,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       },
       'S5.1': {
         ...s5Metrics,
-        famousStep1FreeNamingCorrect: Math.min(8, Math.max(4, sLetterFree - 2)),
+        famousStep1FreeNamingCorrect: Math.min(8, Math.max(4, freeSuccess - 2)),
         famousStep2aVisualSemanticCorrect: 8,
         famousStep2bVerbalClueCorrect: 8,
         famousStep3PhonemicCuedCorrect: 8,
@@ -539,35 +581,81 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   };
 
   // Deal a new Blackjack hand when the player taps the active Corner Chip Stack
+  // Includes the 3-Encounter Fixed Anchor Loop (Hand #2 -> Hand #6 -> Hand #10)
+  // where ONE variable changes at a time!
   const handleDealFromCornerChip = (corner: 'Q1' | 'Q2' | 'Q3' | 'Q4', chipAmount: number) => {
     const betRt = Math.max(150, Math.round(performance.now() - cornerOnsetRef.current));
     setLastBetCornerRtMs(betRt);
     setCurrentBet(chipAmount);
+    setDiscardPeekOpen(false);
+    setDiscardSnapClaimedThisHand(false);
 
     let currentShoe = shoe.length < 15 ? buildShuffledShoe(handNumber) : [...shoe];
-    const p1 = { ...currentShoe.pop()! };
-    const d1 = { ...currentShoe.pop()! };
-    const p2 = { ...currentShoe.pop()! };
-    const d2 = { ...currentShoe.pop()! };
+    let p1: BlackjackCard;
+    let d1: BlackjackCard;
+    let p2: BlackjackCard;
+    let d2: BlackjackCard;
+    let shouldHaveUpsideDown = false;
+    let nextSideMode: 'SUIT_MATCH' | 'SEVEN_LUCK' =
+      Math.floor((handNumber - 1) / 2) % 2 === 0 ? 'SUIT_MATCH' : 'SEVEN_LUCK';
 
-    // On every Even hand (or when an asymmetric rank is dealt), make 1 card land upside-down (180°)!
-    const shouldHaveUpsideDown =
-      handNumber % 2 === 0 ||
-      ASYMMETRIC_RANKS.includes(p1.rank) ||
-      ASYMMETRIC_RANKS.includes(p2.rank);
+    // FIXED ANCHOR HANDS (Change One Variable at a Time — Ceteris Paribus!)
+    if (handNumber === 2) {
+      // Anchor Pass 1 (Discovery Baseline): A♠ + 7♥ (Soft 18) vs Dealer 6♣, all upright (0°), SUIT_MATCH rule
+      p1 = { id: `anc1-p1`, rank: 'A', suit: '♠', suitName: 'Spades', value: 11, isUpsideDown: false };
+      p2 = { id: `anc1-p2`, rank: '7', suit: '♥', suitName: 'Hearts', value: 7, isUpsideDown: false };
+      d1 = { id: `anc1-d1`, rank: '6', suit: '♣', suitName: 'Clubs', value: 6, isUpsideDown: false };
+      d2 = { ...currentShoe.pop()!, isUpsideDown: false };
+      nextSideMode = 'SUIT_MATCH';
+      shouldHaveUpsideDown = false;
+    } else if (handNumber === 6) {
+      // Anchor Pass 2 (Implicit Retention + Single Variable Changed: 7 of Hearts is 180° Upside-Down!)
+      p1 = { id: `anc2-p1`, rank: 'A', suit: '♠', suitName: 'Spades', value: 11, isUpsideDown: false };
+      p2 = { id: `anc2-p2`, rank: '7', suit: '♥', suitName: 'Hearts', value: 7, isUpsideDown: true };
+      d1 = { id: `anc2-d1`, rank: '6', suit: '♣', suitName: 'Clubs', value: 6, isUpsideDown: false };
+      d2 = { ...currentShoe.pop()!, isUpsideDown: false };
+      nextSideMode = 'SUIT_MATCH';
+      shouldHaveUpsideDown = true;
+    } else if (handNumber === 10) {
+      // Anchor Pass 3 (Single Variable Changed: Same upright cards, but Side-Pot Rule flips to SEVEN_LUCK!)
+      p1 = { id: `anc3-p1`, rank: 'A', suit: '♠', suitName: 'Spades', value: 11, isUpsideDown: false };
+      p2 = { id: `anc3-p2`, rank: '7', suit: '♥', suitName: 'Hearts', value: 7, isUpsideDown: false };
+      d1 = { id: `anc3-d1`, rank: '6', suit: '♣', suitName: 'Clubs', value: 6, isUpsideDown: false };
+      d2 = { ...currentShoe.pop()!, isUpsideDown: false };
+      nextSideMode = 'SEVEN_LUCK';
+      shouldHaveUpsideDown = false;
+    } else {
+      p1 = { ...currentShoe.pop()! };
+      d1 = { ...currentShoe.pop()! };
+      p2 = { ...currentShoe.pop()! };
+      d2 = { ...currentShoe.pop()! };
 
-    if (shouldHaveUpsideDown) {
-      if (ASYMMETRIC_RANKS.includes(p2.rank)) {
-        p2.isUpsideDown = true;
-      } else if (ASYMMETRIC_RANKS.includes(p1.rank)) {
-        p1.isUpsideDown = true;
-      } else {
-        d1.isUpsideDown = true;
+      shouldHaveUpsideDown =
+        handNumber % 2 === 0 ||
+        ASYMMETRIC_RANKS.includes(p1.rank) ||
+        ASYMMETRIC_RANKS.includes(p2.rank);
+
+      if (shouldHaveUpsideDown) {
+        if (ASYMMETRIC_RANKS.includes(p2.rank)) {
+          p2.isUpsideDown = true;
+        } else if (ASYMMETRIC_RANKS.includes(p1.rank)) {
+          p1.isUpsideDown = true;
+        } else {
+          d1.isUpsideDown = true;
+        }
       }
     }
 
-    const nextSideMode: 'SUIT_MATCH' | 'SEVEN_LUCK' =
-      Math.floor((handNumber - 1) / 2) % 2 === 0 ? 'SUIT_MATCH' : 'SEVEN_LUCK';
+    // Track whether this hand creates a natural Discard Snap Match opportunity
+    if (
+      lastDiscardTopCard &&
+      (p1.rank === lastDiscardTopCard.rank ||
+        p2.rank === lastDiscardTopCard.rank ||
+        d1.rank === lastDiscardTopCard.rank)
+    ) {
+      setDiscardSnapOpportunities((o) => o + 1);
+    }
+
     setPrevSideRuleMode(sideRuleMode);
     setSideRuleMode(nextSideMode);
     setSideRuleClaimed(false);
@@ -579,6 +667,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     setCurrentHandHadUpsideDown(shouldHaveUpsideDown);
     setCurrentHandSpottedUpsideDown(false);
     setCurrentHandFlipRtMs(null);
+    setHadInterruptionThisHand(false);
+    lastPointerActivityRef.current = performance.now();
     setTableStage('PLAYER_TURN');
     handOnsetRef.current = performance.now();
     setHandBanner(`Hand #${handNumber} Dealt ($${chipAmount} Bet) — Hit, Stand, or Double Down!`);
@@ -587,6 +677,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   // Player taps a card on the felt to flip an upside-down card upright
   const handleTapCardToFlip = (owner: 'PLAYER' | 'DEALER', idx: number) => {
     if (tableStage !== 'PLAYER_TURN') return;
+    lastPointerActivityRef.current = performance.now();
     const list = owner === 'PLAYER' ? [...playerHand] : [...dealerHand];
     const target = list[idx];
     if (!target) return;
@@ -607,7 +698,6 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     }
   };
 
-  // Evaluate whether the active Side-Pot Bonus condition is actually true on this hand
   const isSidePotConditionMet = (): boolean => {
     const upCard = dealerHand[0];
     if (!upCard) return false;
@@ -617,19 +707,28 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     return [...playerHand, upCard].some((c) => c.rank === '7') || evaluateBlackjackHand(playerHand).total === 14;
   };
 
+  const isDiscardSnapMatchValid = (): boolean => {
+    if (!lastDiscardTopCard) return false;
+    const visibleCards = [...playerHand, dealerHand[0]].filter(Boolean);
+    return visibleCards.some((c) => c.rank === lastDiscardTopCard.rank);
+  };
+
   // Resolve the hand when Player Stands, Doubles, or Busts
   const finalizeHand = (
     finalPlayerCards: BlackjackCard[],
     firstAction: 'HIT' | 'STAND' | 'DOUBLE',
     betWager: number
   ) => {
-    const decisionRt = Math.max(180, Math.round(performance.now() - handOnsetRef.current));
+    const now = performance.now();
+    const decisionRt = Math.max(180, Math.round(now - handOnsetRef.current));
+    const pointerIdleMs = now - lastPointerActivityRef.current;
+    const wasPointerIdle = decisionRt > 5500 && pointerIdleMs > 4500;
+
     const upCard = dealerHand[0];
     const mathSound = upCard
       ? isActionMathematicallySound(playerHand, upCard, firstAction)
       : true;
 
-    // Dealer draws until total >= 17
     let currentShoe = [...shoe];
     let dCards = [...dealerHand];
     const pEval = evaluateBlackjackHand(finalPlayerCards);
@@ -675,8 +774,13 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     const sidePotMet = isSidePotConditionMet();
     const sideRuleOk = sidePotMet ? sideRuleClaimed : !sideRuleClaimed;
 
+    const anchorPass: 1 | 2 | 3 | null =
+      handNumber === 2 ? 1 : handNumber === 6 ? 2 : handNumber === 10 ? 3 : null;
+
     const record: HandRecord = {
       handNumber,
+      isAnchorHand: anchorPass !== null,
+      anchorPassNumber: anchorPass,
       decisionRtMs: decisionRt,
       playerFinalTotal: pEval.total,
       dealerFinalTotal: dEval.total,
@@ -689,11 +793,20 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       betQuadrant: activeBetCorner,
       betPlacementRtMs: lastBetCornerRtMs,
       sideRuleCondition: cond,
-      sideRuleCorrect: sideRuleOk
+      sideRuleCorrect: sideRuleOk,
+      isPausedOrBlurred: hadInterruptionThisHand || isPaused,
+      postPauseWarmup: isPostPauseWarmupHand,
+      pointerIdleDuringTrial: wasPointerIdle
     };
 
     const nextRecords = [...handRecords, record];
     setHandRecords(nextRecords);
+    setIsPostPauseWarmupHand(false);
+
+    // Move player's first card to the top of the Discard Tray for the next hand's Snap Match
+    if (finalPlayerCards[0]) {
+      setLastDiscardTopCard({ ...finalPlayerCards[0], isUpsideDown: false });
+    }
 
     onAppendTrialEvent({
       stationId: 'S3.1',
@@ -701,20 +814,18 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       practiceMode: false,
       presentationMode,
       stimulusOnsetMs: Math.round(handOnsetRef.current),
-      responseMs: Math.round(performance.now()),
+      responseMs: Math.round(now),
       rtMs: decisionRt,
       isCorrect: mathSound,
       maxFrameDeltaMs: 16.7,
-      modeSwitchInterrupted: false
+      modeSwitchInterrupted: hadInterruptionThisHand || isPaused
     });
 
     syncAllTelemetryToApp(
       nextRecords,
-      sequenceCorrectCount,
-      sequenceTotalCount,
-      delayedFreeHits,
-      delayedCuedHits,
-      delayedTotalChecks,
+      discardSnapHits,
+      discardSnapOpportunities,
+      discardPeekCount,
       clockDurationSec,
       clockNoonErrorDeg
     );
@@ -742,9 +853,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const handlePlayerHit = () => {
     if (tableStage !== 'PLAYER_TURN' || shoe.length === 0) return;
+    lastPointerActivityRef.current = performance.now();
     const nextShoe = [...shoe];
     const drawn = { ...nextShoe.pop()! };
-    // Occasionally a hit card in a 3-4 card crowded hand lands upside down!
     if (!currentHandHadUpsideDown && ASYMMETRIC_RANKS.includes(drawn.rank)) {
       drawn.isUpsideDown = true;
       setCurrentHandHadUpsideDown(true);
@@ -761,11 +872,13 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const handlePlayerStand = () => {
     if (tableStage !== 'PLAYER_TURN') return;
+    lastPointerActivityRef.current = performance.now();
     finalizeHand(playerHand, 'STAND', currentBet);
   };
 
   const handlePlayerDouble = () => {
     if (tableStage !== 'PLAYER_TURN' || shoe.length === 0) return;
+    lastPointerActivityRef.current = performance.now();
     const nextShoe = [...shoe];
     const drawn = { ...nextShoe.pop()!, isUpsideDown: false };
     const nextHand = [...playerHand, drawn];
@@ -775,37 +888,10 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     finalizeHand(nextHand, 'DOUBLE', currentBet * 2);
   };
 
-  // Advance from HAND_RESULT to next hand (or trigger Cut-Card / Pit Clock bonus)
   const handleAdvanceToNextHand = () => {
     const nextNum = handNumber + 1;
     const corners: ('Q1' | 'Q2' | 'Q3' | 'Q4')[] = ['Q2', 'Q1', 'Q3', 'Q4'];
     setActiveBetCorner(corners[nextNum % 4]);
-
-    // Trigger Cut-Card Discard & Delayed Tablemate Check every 3rd hand
-    if (handNumber % 3 === 0) {
-      const targetCards = [...playerHand.slice(0, 2), dealerHand[0]].filter(Boolean);
-      const distractor = shoe[0] ?? {
-        id: 'extra-q',
-        rank: 'Q',
-        suit: '♦' as Suit,
-        suitName: 'Diamonds' as const,
-        value: 10
-      };
-      const choices = [...targetCards, distractor].map((c, i) => ({
-        ...c,
-        id: `cut-${handNumber}-${i}-${c.rank}${c.suit}`,
-        isUpsideDown: false,
-        wasFlippedByPlayer: false
-      }));
-      setDiscardTargetCards(choices.slice(0, 3));
-      // Shuffle display order slightly so player taps them in deal order
-      setDiscardChoices([choices[1], choices[0], choices[3], choices[2]]);
-      setDiscardPickedIds([]);
-      setCutCardStep('DISCARD_ORDER');
-      setHandNumber(nextNum);
-      setTableStage('CUT_CARD_BONUS');
-      return;
-    }
 
     // Trigger Happy Hour Noon Clock Bonus after Hand 4 (if not completed yet)
     if (handNumber === 4 && !clockCompletedOnce) {
@@ -822,22 +908,28 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     setTableStage('PLACE_CORNER_BET');
   };
 
-  // Save a reproducible 5-Minute Session Snapshot to localStorage
   const handleSaveSessionSnapshot = () => {
+    const { dist, demoNorms } = telemetryAnalytics;
     const snap: SavedBlackjackSessionSummary = {
       sessionId: `BJ-${Date.now().toString().slice(-5)}`,
       timestampIso: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      handsPlayed: liveSummary.handsPlayed,
+      ageYears: demoProfile.ageYears,
+      educationYears: demoProfile.educationYears,
+      handsPlayed: telemetryAnalytics.handsPlayed,
+      validEngagedHands: dist.validEngagedCount,
+      censoredDistractionHands: dist.censoredCount,
       elapsedSec,
       finalBankroll: bankroll,
-      meanDecisionRtMs: liveSummary.meanRtMs,
-      rtCvPct: liveSummary.rtCvPct,
-      mathOptimalRate: liveSummary.mathOptimalRate,
-      upsideDownDetectionRate: liveSummary.upsideDownDetectionRate,
-      delayedRecallRate:
-        delayedTotalChecks > 0
-          ? Math.round(((delayedFreeHits + delayedCuedHits) / delayedTotalChecks) * 100)
-          : 100,
+      medianDecisionRtMs: dist.medianRtMs,
+      seMedianRtMs: dist.seMedianRtMs,
+      madRtMs: dist.madRtMs,
+      bowleySkewness: dist.bowleyQuantileSkewness,
+      moorsKurtosisExcess: dist.moorsOctileKurtosisExcess,
+      exGaussianTauMs: dist.exGaussianTauMs,
+      mathOptimalRate: telemetryAnalytics.mathOptimalRatePct,
+      upsideDownDetectionRate: telemetryAnalytics.upsideDownDetectionRatePct,
+      compositeDemoZ: demoNorms.compositeDemoZ,
+      compositePercentile: demoNorms.compositePercentile,
       clockNoonErrorDeg,
       clockDurationSec
     };
@@ -852,16 +944,87 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const pEval = evaluateBlackjackHand(playerHand);
   const dEval = evaluateBlackjackHand(dealerHand);
+  const { dist, demoNorms } = telemetryAnalytics;
 
   return (
     <div className="space-y-5">
       {/* =====================================================================
-          TOP CASINO RAIL: 5-Minute Shoe Clock, Bankroll, Side-Pot Rule & Controls
+          DEMOGRAPHIC & COGNITIVE RESERVE CALIBRATION BAR
+          Adjusts Expected Baseline (Y_hat) and Z_demo for Age, Education & Card Familiarity
+         ===================================================================== */}
+      <div className="rounded-2xl bg-slate-950/90 border border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="font-extrabold uppercase tracking-wider text-sky-400">
+            🎯 Normative Reference Profile:
+          </span>
+
+          <label className="flex items-center gap-1.5 text-slate-300 font-semibold">
+            Age:
+            <select
+              value={demoProfile.ageYears}
+              onChange={(e) =>
+                setDemoProfile((p) => ({ ...p, ageYears: Number(e.target.value) }))
+              }
+              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
+            >
+              <option value={58}>58 yrs (Middle-Aged)</option>
+              <option value={65}>65 yrs (Young-Old)</option>
+              <option value={72}>72 yrs (Typical Clinic)</option>
+              <option value={79}>79 yrs (Older Adult)</option>
+              <option value={85}>85 yrs (Octogenarian)</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-1.5 text-slate-300 font-semibold">
+            Education / Reserve:
+            <select
+              value={demoProfile.educationYears}
+              onChange={(e) =>
+                setDemoProfile((p) => ({ ...p, educationYears: Number(e.target.value) }))
+              }
+              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
+            >
+              <option value={10}>10 yrs (Some High School)</option>
+              <option value={12}>12 yrs (High School / GED)</option>
+              <option value={14}>14 yrs (Associate / Trade)</option>
+              <option value={16}>16 yrs (Bachelor’s Degree)</option>
+              <option value={18}>18 yrs (Master’s Degree)</option>
+              <option value={20}>20 yrs (MD / JD / PhD / Engineer)</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-1.5 text-slate-300 font-semibold">
+            Card Familiarity:
+            <select
+              value={demoProfile.gameFamiliarity}
+              onChange={(e) =>
+                setDemoProfile((p) => ({
+                  ...p,
+                  gameFamiliarity: e.target.value as 'LOW' | 'MODERATE' | 'HIGH'
+                }))
+              }
+              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
+            >
+              <option value="LOW">Rarely Plays Cards</option>
+              <option value="MODERATE">Casual Card Player</option>
+              <option value="HIGH">Plays Weekly (Experienced)</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="text-[11px] font-bold text-emerald-300">
+          Expected Median RT: {demoNorms.expectedMedianRtMs}ms • Expected 21 Math: {demoNorms.expectedMathAccuracyPct}%
+        </div>
+      </div>
+
+      {/* =====================================================================
+          TOP CASINO RAIL: 5-Minute Shoe Clock, Bankroll & Pause/Clock Controls
          ===================================================================== */}
       <div className="rounded-2xl bg-slate-950 border-2 border-emerald-500/50 p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg">
         <div className="flex flex-wrap items-center gap-3">
           <span className="px-3.5 py-1.5 rounded-xl bg-emerald-900/90 border border-emerald-400 text-xs font-extrabold uppercase tracking-wider text-white">
             🃏 Blackjack 21 • Hand #{handNumber}
+            {handNumber === 2 || handNumber === 6 || handNumber === 10 ? ' (Anchor Hand)' : ''}
           </span>
           <span className="px-3.5 py-1.5 rounded-xl bg-slate-900 border border-amber-400/60 text-sm font-extrabold text-amber-300">
             💰 Bankroll: ${bankroll} {doublePayoutActive ? '(2x Happy Hour!)' : ''}
@@ -890,28 +1053,39 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
           )}
           <button
             type="button"
-            onClick={() => setIsPaused((p) => !p)}
+            onClick={() => {
+              const nextPaused = !isPaused;
+              setIsPaused(nextPaused);
+              if (nextPaused) {
+                setHadInterruptionThisHand(true);
+              } else {
+                // Mark the next hand after resume as post-pause re-orientation so it doesn't skew RT moments
+                setIsPostPauseWarmupHand(true);
+                handOnsetRef.current = performance.now();
+                cornerOnsetRef.current = performance.now();
+              }
+            }}
             className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-bold text-slate-200 cursor-pointer"
           >
-            {isPaused ? '▶ Resume' : '⏸ Pause'}
+            {isPaused ? '▶ Resume (Censors Pause)' : '⏸ Pause for Distraction'}
           </button>
         </div>
       </div>
 
       {/* =====================================================================
-          STAGE 0: WARMUP INTRO & SIMPLE TABLE RULES (1-Screen Clear Setup)
+          STAGE 0: WARMUP INTRO & SIMPLE TABLE RULES (Zero Popups During Play)
          ===================================================================== */}
       {tableStage === 'WARMUP_INTRO' && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 sm:p-8 text-center space-y-6 shadow-2xl">
           <div className="space-y-2 max-w-2xl mx-auto">
             <div className="inline-block px-3.5 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-xs font-extrabold uppercase tracking-wider text-amber-300">
-              5-Minute Casino Shoe • Simple, Fun &amp; Reproducible
+              5-Minute Casino Shoe • Zero Interrupting Quizzes
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
               Welcome to the 21 Club Blackjack Table
             </h2>
             <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
-              Play 5 minutes of classic <strong>Blackjack 21</strong> (beat the Dealer without going over 21). Three fun house bonuses are built right into the table:
+              Play 5 minutes of classic <strong>Blackjack 21</strong> (beat the Dealer without going over 21). Three natural table bonuses are built right onto the felt:
             </p>
           </div>
 
@@ -921,16 +1095,16 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 1. Eagle-Eye Flip (+$50)
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                If a card ever slides out of the shoe <strong>upside-down</strong>, simply tap that card on the felt to flip it upright for an instant <strong>+$50 Bonus</strong>!
+                If a card ever slides out of the shoe <strong>upside-down</strong>, tap that card on the felt to flip it upright for an instant <strong>+$50 Bonus</strong>!
               </p>
             </div>
 
             <div className="p-4 rounded-xl bg-slate-950/85 border border-amber-500/40 space-y-1.5">
               <div className="text-xs font-extrabold uppercase text-amber-300">
-                2. Tablemates &amp; Cut-Card (+$100)
+                2. Discard Snap Match (+$50)
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                Notice your two tablemates’ Lucky Cards (<strong>Sam: 7♥</strong> &amp; <strong>Clara: K♠</strong>). When the yellow Cut-Card appears every 3 hands, win <strong>+$100</strong>!
+                If a card on the table matches the rank of the <strong>top card just placed in the Discard Tray</strong>, tap <strong>🔔 Snap Match</strong>! (You can tap <strong>👁️ Peek</strong> anytime).
               </p>
             </div>
 
@@ -962,25 +1136,6 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
          ===================================================================== */}
       {tableStage === 'PLACE_CORNER_BET' && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 space-y-5 shadow-2xl">
-          {/* Tablemates Header Strip (Shows Sam's 7♥ and Clara's K♠ on Hands 1–2, then turns them face-down so Delayed Recall is genuinely tested!) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/80 border border-slate-800 rounded-xl p-3">
-            {TABLEMATE_POOL.map((tm) => (
-              <div key={tm.seatLabel} className="flex items-center justify-between gap-2 px-2">
-                <div>
-                  <div className="text-[11px] font-extrabold uppercase text-amber-300">{tm.seatLabel}</div>
-                  <div className="text-xs text-slate-300">
-                    {handNumber <= 2
-                      ? `Lucky Side-Bet Card: ${tm.label}`
-                      : 'Lucky Side-Bet Card: 🂠 Locked Under Chip'}
-                  </div>
-                </div>
-                <span className="px-2.5 py-1 rounded-lg bg-emerald-950 border border-emerald-500/50 text-xs font-extrabold text-emerald-200">
-                  {handNumber <= 2 ? `${tm.card.rank}${tm.card.suit}` : '🂠'}
-                </span>
-              </div>
-            ))}
-          </div>
-
           <div className="text-center space-y-1">
             <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
               Deal Hand #{handNumber} • Tap the Glowing Corner Chip Stack
@@ -990,7 +1145,6 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </h3>
           </div>
 
-          {/* 4-Corner Betting Spots on the Casino Felt */}
           <div className="grid grid-cols-2 gap-4">
             {(
               [
@@ -1032,45 +1186,109 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       )}
 
       {/* =====================================================================
-          STAGE 2 & 3: LIVE BLACKJACK HAND (PLAYER_TURN & HAND_RESULT)
+          STAGE 2 & 3: LIVE BLACKJACK HAND (With On-Felt Discard Snap & Peek!)
          ===================================================================== */}
       {(tableStage === 'PLAYER_TURN' || tableStage === 'HAND_RESULT') && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 space-y-5 shadow-2xl">
-          {/* Active Side-Pot Rule Strip (Natural Executive Set-Shift Between Suit Match & Lucky 7/14) */}
-          <div className="rounded-xl bg-slate-950/90 border border-amber-400/60 p-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="text-xs sm:text-sm font-extrabold text-amber-300">
-              {sideRuleMode === 'SUIT_MATCH'
-                ? '🔥 Side-Pot Rule: Claim +$40 if any of your cards matches the Dealer’s Up-Card SUIT!'
-                : '⚡ Side-Pot Rule: Claim +$40 if you hold a 7 or your hand totals 14!'}
+          {/* Top Table Rail: Side-Pot Rule + On-Felt Discard Tray (Snap Match & Natural Peek!) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {/* Active Side-Pot Rule Strip */}
+            <div className="rounded-xl bg-slate-950/90 border border-amber-400/60 p-3 flex items-center justify-between gap-2">
+              <div className="text-xs font-extrabold text-amber-300">
+                {sideRuleMode === 'SUIT_MATCH'
+                  ? '🔥 Side-Pot: Match Dealer’s Up-Card SUIT (+$40)'
+                  : '⚡ Side-Pot: Hold a 7 or Total 14 (+$40)'}
+              </div>
+
+              {tableStage === 'PLAYER_TURN' && (
+                <button
+                  type="button"
+                  disabled={sideRuleClaimed}
+                  onClick={() => {
+                    lastPointerActivityRef.current = performance.now();
+                    setSideRuleClaimed(true);
+                    if (isSidePotConditionMet()) {
+                      setBankroll((b) => b + 40);
+                      setHandBanner('🔥 Side-Pot Bonus Claimed (+$40 Chips)!');
+                    } else {
+                      setHandBanner('No Side-Pot match on this hand—keep playing your 21 hand!');
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold text-xs border cursor-pointer shrink-0 ${
+                    sideRuleClaimed
+                      ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
+                      : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
+                  }`}
+                >
+                  {sideRuleClaimed ? '✓ Checked' : '🔥 Claim +$40'}
+                </button>
+              )}
             </div>
 
-            {tableStage === 'PLAYER_TURN' && (
-              <button
-                type="button"
-                disabled={sideRuleClaimed}
-                onClick={() => {
-                  setSideRuleClaimed(true);
-                  if (isSidePotConditionMet()) {
-                    setBankroll((b) => b + 40);
-                    setHandBanner('🔥 Side-Pot Bonus Claimed (+$40 Chips)!');
-                  } else {
-                    setHandBanner('No Side-Pot match on this hand—keep playing your 21 hand!');
-                  }
-                }}
-                className={`px-3.5 py-1.5 rounded-xl font-extrabold text-xs border cursor-pointer ${
-                  sideRuleClaimed
-                    ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
-                    : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
-                }`}
-              >
-                {sideRuleClaimed ? '✓ Side-Pot Checked' : '🔥 Claim +$40 Side-Pot'}
-              </button>
-            )}
+            {/* Natural On-Felt Discard Tray (Replaces Interrupting Memory Quizzes!) */}
+            <div className="rounded-xl bg-slate-950/90 border border-sky-500/50 p-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-bold text-slate-200">
+                🗂️ Discard Tray:{' '}
+                {!lastDiscardTopCard ? (
+                  <span className="text-slate-400">Empty (Hand #1)</span>
+                ) : discardPeekOpen ? (
+                  <span className="text-amber-300 font-extrabold">
+                    Last Discard Was {lastDiscardTopCard.rank}{lastDiscardTopCard.suit}
+                  </span>
+                ) : (
+                  <span className="text-sky-300">🂠 Face-Down (1 Card Ago)</span>
+                )}
+              </div>
+
+              {lastDiscardTopCard && tableStage === 'PLAYER_TURN' && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      lastPointerActivityRef.current = performance.now();
+                      if (!discardPeekOpen) {
+                        setDiscardPeekOpen(true);
+                        setDiscardPeekCount((c) => c + 1);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-sky-200 cursor-pointer"
+                  >
+                    👁️ {discardPeekOpen ? 'Peeked' : 'Peek Discard'}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={discardSnapClaimedThisHand}
+                    onClick={() => {
+                      lastPointerActivityRef.current = performance.now();
+                      setDiscardSnapClaimedThisHand(true);
+                      if (isDiscardSnapMatchValid()) {
+                        setBankroll((b) => b + 50);
+                        setDiscardSnapHits((h) => h + 1);
+                        setHandBanner(
+                          `🔔 Snap Match! You remembered the ${lastDiscardTopCard.rank} in the Discard Tray (+$50)!`
+                        );
+                      } else {
+                        setHandBanner(
+                          `No ${lastDiscardTopCard.rank} showing on the table this hand—keep playing!`
+                        );
+                      }
+                    }}
+                    className={`px-3 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer ${
+                      discardSnapClaimedThisHand
+                        ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
+                        : 'bg-sky-600 hover:bg-sky-500 border-sky-300 text-white'
+                    }`}
+                  >
+                    {discardSnapClaimedThisHand ? '✓ Snap Checked' : '🔔 Snap Match (+$50)'}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Dealer Hand vs Player Hand Felt */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
-            {/* Dealer's Cards */}
             <div className="p-4 rounded-2xl bg-slate-950/75 border border-slate-700 text-center space-y-3">
               <div className="text-xs font-extrabold uppercase tracking-wider text-slate-300">
                 Dealer’s Hand{' '}
@@ -1102,7 +1320,6 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               </div>
             </div>
 
-            {/* Player's Cards */}
             <div className="p-4 rounded-2xl bg-slate-950/85 border-2 border-amber-400/70 text-center space-y-3">
               <div className="flex items-center justify-between px-2">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
@@ -1126,12 +1343,10 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </div>
           </div>
 
-          {/* Status Banner */}
           <div className="text-center text-sm sm:text-base font-extrabold text-emerald-300">
             {handBanner}
           </div>
 
-          {/* Action Buttons: HIT / STAND / DOUBLE DOWN */}
           {tableStage === 'PLAYER_TURN' ? (
             <div className="flex flex-wrap justify-center gap-4 pt-1">
               <button
@@ -1175,114 +1390,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       )}
 
       {/* =====================================================================
-          STAGE 4: CUT-CARD BONUS (Every 3 Hands: Discard Sequence + Delayed Recall)
-         ===================================================================== */}
-      {tableStage === 'CUT_CARD_BONUS' && (
-        <div className="rounded-2xl bg-[#0D231A] border-2 border-amber-400 p-6 text-center space-y-5 shadow-2xl">
-          <div className="inline-block px-4 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-xs font-extrabold uppercase tracking-wider text-amber-300">
-            🟨 Yellow Cut-Card Jackpot (+$100 Bonus Chips)
-          </div>
-
-          {cutCardStep === 'DISCARD_ORDER' && (
-            <div className="space-y-4">
-              <h3 className="text-xl font-extrabold text-white">
-                Part 1: Tap the 3 Cards From the Last Hand in the Order They Were On the Table:
-              </h3>
-              <div className="text-sm font-bold text-emerald-300">
-                Target Order:{' '}
-                {discardTargetCards.map((c) => `${c.rank}${c.suit}`).join(' → ')} ({discardPickedIds.length}/3)
-              </div>
-
-              <div className="flex flex-wrap justify-center gap-4 py-2">
-                {discardChoices.map((c) => {
-                  const picked = discardPickedIds.includes(c.id);
-                  return (
-                    <div key={c.id} className={picked ? 'opacity-40 scale-95' : ''}>
-                      <AuthenticBlackjackCardView
-                        card={c}
-                        onClickCard={() => {
-                          if (picked) return;
-                          const next = [...discardPickedIds, c.id];
-                          setDiscardPickedIds(next);
-                          if (next.length >= 3) {
-                            const exactMatch = discardTargetCards.every(
-                              (tc, i) => tc.id === next[i]
-                            );
-                            if (exactMatch) setBankrollBonus(50);
-                            setSequenceCorrectCount((s) => s + (exactMatch ? 1 : 0));
-                            setSequenceTotalCount((t) => t + 1);
-                            setCutCardStep('DELAYED_SEAT_FREE');
-                          }
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {(cutCardStep === 'DELAYED_SEAT_FREE' || cutCardStep === 'DELAYED_SEAT_CUED') && (
-            <div className="space-y-4">
-              {(() => {
-                const tm = TABLEMATE_POOL[(handNumber / 3) % 2 === 1 ? 0 : 1] ?? TABLEMATE_POOL[0];
-                return (
-                  <>
-                    <h3 className="text-xl font-extrabold text-white">
-                      Part 2: Which Lucky Side-Bet Card Did <strong>{tm.seatLabel}</strong> Lock Under Their Chip at the Start of the Shoe?
-                    </h3>
-                    {cutCardStep === 'DELAYED_SEAT_CUED' && (
-                      <div className="p-3 rounded-xl bg-amber-950/70 border border-amber-400 text-xs font-bold text-amber-200 max-w-md mx-auto">
-                        💡 {tm.cueHint}
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl mx-auto">
-                      {[
-                        '7 of Hearts (7♥)',
-                        'King of Spades (K♠)',
-                        'Ace of Diamonds (A♦)',
-                        '10 of Clubs (10♣)'
-                      ].map((label) => (
-                        <button
-                          key={label}
-                          type="button"
-                          onClick={() => {
-                            const hit = label === tm.label;
-                            if (cutCardStep === 'DELAYED_SEAT_FREE') {
-                              if (hit) {
-                                setBankroll((b) => b + 100);
-                                setDelayedFreeHits((f) => f + 1);
-                                setDelayedTotalChecks((t) => t + 1);
-                                cornerOnsetRef.current = performance.now();
-                                setTableStage('PLACE_CORNER_BET');
-                              } else {
-                                setCutCardStep('DELAYED_SEAT_CUED');
-                              }
-                            } else {
-                              if (hit) setBankroll((b) => b + 50);
-                              setDelayedCuedHits((c) => c + (hit ? 1 : 0));
-                              setDelayedTotalChecks((t) => t + 1);
-                              cornerOnsetRef.current = performance.now();
-                              setTableStage('PLACE_CORNER_BET');
-                            }
-                          }}
-                          className="min-h-14 p-4 rounded-xl bg-slate-900 hover:bg-sky-900 border-2 border-slate-600 text-base font-extrabold text-white cursor-pointer"
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =====================================================================
-          STAGE 5: HAPPY HOUR PIT BOSS CLOCK BONUS (NO TIMER BAR! 30s Noon Clock)
+          STAGE 4: HAPPY HOUR PIT BOSS CLOCK BONUS (NO TIMER BAR! 30s Noon Clock)
          ===================================================================== */}
       {tableStage === 'PIT_CLOCK_NOON_BONUS' && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-amber-400 p-6 text-center space-y-4 shadow-2xl">
@@ -1404,17 +1512,21 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       )}
 
       {/* =====================================================================
-          LIVE REPRODUCIBLE TELEMETRY & MULTI-SESSION LONGITUDINAL LOG
-          Updates after every single Blackjack hand so you can verify real results!
+          ROBUST STATISTICAL TELEMETRY & DEMOGRAPHIC NORMING PANEL
+          Reports Median (Q50) ± SE_med, Leading-Edge Q10, MAD, IQR, Bowley Skewness,
+          Moors' Octile Kurtosis, Ex-Gaussian (Mu, Sigma, Tau), Distraction Censoring,
+          and Age + Education Adjusted Z_demo!
          ===================================================================== */}
-      <div className="rounded-2xl bg-slate-950/90 border border-slate-800 p-4 space-y-4">
+      <div className="rounded-2xl bg-slate-950/95 border border-slate-800 p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <div className="text-xs font-extrabold uppercase tracking-wider text-sky-400">
-              📊 Live Reproducible Blackjack Surrogate Telemetry (Updates Every Hand)
+              📊 Robust Non-Parametric, Ex-Gaussian &amp; Age/Education Normed Telemetry
             </div>
             <p className="text-[11px] text-slate-400">
-              Silent trial-by-trial metrics extracted purely from your Blackjack gameplay across repeated hands:
+              Engaged Hands: <strong className="text-white">{dist.validEngagedCount}</strong> • Censored Pauses/Distractions:{' '}
+              <strong className="text-amber-300">{dist.censoredCount}</strong> • Sampling Gate:{' '}
+              <strong className="text-emerald-300">{dist.samplingAdequacy}</strong>
             </p>
           </div>
 
@@ -1422,10 +1534,10 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             <button
               type="button"
               onClick={handleSaveSessionSnapshot}
-              disabled={liveSummary.handsPlayed === 0}
+              disabled={telemetryAnalytics.handsPlayed === 0}
               className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 disabled:opacity-40 text-xs font-bold text-white cursor-pointer"
             >
-              💾 Save Session Snapshot ({liveSummary.handsPlayed} Hands)
+              💾 Save Session Snapshot
             </button>
             <button
               type="button"
@@ -1440,59 +1552,89 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
           </div>
         </div>
 
-        {/* 6 Real-Time Surrogate Cards */}
+        {/* Demographic Normative Verdict Strip */}
+        <div
+          className={`p-3 rounded-xl border text-xs font-bold flex flex-wrap items-center justify-between gap-2 ${
+            demoNorms.highReserveMaskingAlert
+              ? 'bg-amber-950/60 border-amber-400 text-amber-200'
+              : demoNorms.compositeDemoZ <= -1.5
+              ? 'bg-rose-950/60 border-rose-400 text-rose-200'
+              : 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
+          }`}
+        >
+          <span>🩺 {demoNorms.normativeSummaryText}</span>
+          <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-700 text-white">
+            Z_demo = {demoNorms.compositeDemoZ >= 0 ? '+' : ''}
+            {demoNorms.compositeDemoZ} SD ({demoNorms.compositePercentile}th %ile)
+          </span>
+        </div>
+
+        {/* 6 Scientific Distribution & Domain Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center">
           <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Hands Played</div>
-            <div className="text-lg font-extrabold text-white">{liveSummary.handsPlayed}</div>
-            <div className="text-[10px] text-emerald-400">{formatMmSs(elapsedSec)} elapsed</div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Decision Speed &amp; CV</div>
-            <div className="text-lg font-extrabold text-sky-300">
-              {liveSummary.meanRtMs > 0 ? `${liveSummary.meanRtMs}ms` : '—'}
+            <div className="text-[10px] font-bold uppercase text-slate-400">Median RT ± SE</div>
+            <div className="text-base font-extrabold text-white">
+              {dist.medianRtMs > 0 ? `${dist.medianRtMs} ± ${dist.seMedianRtMs}ms` : '—'}
             </div>
-            <div className="text-[10px] text-slate-400">Fluctuation CV: {liveSummary.rtCvPct}%</div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">21 Math &amp; Soft-Ace</div>
-            <div className="text-lg font-extrabold text-emerald-300">
-              {liveSummary.mathOptimalRate}%
+            <div className="text-[10px] text-sky-300">
+              Fast Q10: {dist.q10LeadingEdgeMs || '—'}ms (Z={demoNorms.zProcessingSpeedModal})
             </div>
-            <div className="text-[10px] text-slate-400">Optimal Hit/Stand</div>
           </div>
 
           <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Upside-Down Card</div>
-            <div className="text-lg font-extrabold text-amber-300">
-              {liveSummary.upsideDownSpotted}/{liveSummary.upsideDownOpportunities}
+            <div className="text-[10px] font-bold uppercase text-slate-400">MAD &amp; IQR Spread</div>
+            <div className="text-base font-extrabold text-emerald-300">
+              MAD: {dist.madRtMs || '—'}ms
             </div>
             <div className="text-[10px] text-slate-400">
-              {liveSummary.upsideDownDetectionRate}% Spotted
+              IQR: {dist.iqrRtMs || '—'}ms • CoMAD: {dist.coMadRatio}
             </div>
           </div>
 
           <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">4-Corner Chip RT</div>
-            <div className="text-xs font-extrabold text-white mt-1">
-              TL:{liveSummary.qMedians.Q2 || '—'} TR:{liveSummary.qMedians.Q1 || '—'}
-            </div>
-            <div className="text-xs font-extrabold text-white">
-              BL:{liveSummary.qMedians.Q3 || '—'} BR:{liveSummary.qMedians.Q4 || '—'}
-            </div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">30s Noon Clock</div>
-            <div className="text-lg font-extrabold text-emerald-300">
-              {clockDurationSec !== null ? `${clockDurationSec}s` : 'Pending'}
+            <div className="text-[10px] font-bold uppercase text-slate-400">Skewness &amp; Kurtosis</div>
+            <div className="text-sm font-extrabold text-amber-300">
+              Bowley Skew: {dist.bowleyQuantileSkewness}
             </div>
             <div className="text-[10px] text-slate-400">
-              {clockNoonErrorDeg !== null ? `Err: ${clockNoonErrorDeg}°` : 'No timer bar'}
+              Moors Kurt: {dist.moorsOctileKurtosisExcess} (g1={dist.sampleSkewnessG1 ?? '—'})
             </div>
           </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Ex-Gaussian (μ / τ)</div>
+            <div className="text-sm font-extrabold text-sky-300">
+              μ={dist.exGaussianMuMs || '—'}ms • τ={dist.exGaussianTauMs || '—'}ms
+            </div>
+            <div className="text-[10px] text-slate-400">
+              Lapse Ratio τ/μ: {dist.tailToModalRatio} (Z={demoNorms.zAttentionalStabilityTail})
+            </div>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+            <div className="text-[10px] font-bold uppercase text-slate-400">180° Card &amp; 4-Corner</div>
+            <div className="text-sm font-extrabold text-amber-300">
+              180° Flip: {telemetryAnalytics.upsideDownSpotted}/{telemetryAnalytics.upsideDownOpportunities} ({telemetryAnalytics.upsideDownDetectionRatePct}%)
+            </div>
+            <div className="text-[10px] text-slate-400">
+              Medians: {telemetryAnalytics.qMedians.Q2}/{telemetryAnalytics.qMedians.Q1}/{telemetryAnalytics.qMedians.Q3}/{telemetryAnalytics.qMedians.Q4}ms
+            </div>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+            <div className="text-[10px] font-bold uppercase text-slate-400">Implicit &amp; Peek Memory</div>
+            <div className="text-sm font-extrabold text-emerald-300">
+              Snap: {discardSnapHits}/{discardSnapOpportunities} • Peeks: {discardPeekCount}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              Anchor Savings: {telemetryAnalytics.implicitSavingsMs !== null ? `${telemetryAnalytics.implicitSavingsMs}ms` : 'Pending #6'}
+            </div>
+          </div>
+        </div>
+
+        <div className="text-[11px] text-slate-300 bg-slate-900/70 border border-slate-800 rounded-xl px-3.5 py-2">
+          <strong className="text-sky-300">Distribution Signal vs. Noise Analysis:</strong>{' '}
+          {dist.clinicalDistributionInterpretation}
         </div>
 
         {/* Saved Repeated Sessions Comparison Table */}
@@ -1506,25 +1648,25 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 <thead>
                   <tr className="border-b border-slate-800 text-[10px] uppercase text-slate-400">
                     <th className="py-1 pr-2">Run</th>
-                    <th className="py-1 pr-2">Hands / Time</th>
-                    <th className="py-1 pr-2">Bankroll</th>
-                    <th className="py-1 pr-2">Mean RT (CV%)</th>
-                    <th className="py-1 pr-2">21 Math</th>
-                    <th className="py-1 pr-2">180° Card Spot</th>
-                    <th className="py-1">30s Clock</th>
+                    <th className="py-1 pr-2">Age/Edu</th>
+                    <th className="py-1 pr-2">Engaged (Censored)</th>
+                    <th className="py-1 pr-2">Median ± SE</th>
+                    <th className="py-1 pr-2">Skew / Kurt</th>
+                    <th className="py-1 pr-2">Ex-Gauss τ</th>
+                    <th className="py-1">Z_demo (%ile)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {savedSessions.map((s) => (
                     <tr key={s.sessionId} className="border-b border-slate-900">
                       <td className="py-1 pr-2 font-bold text-white">{s.timestampIso}</td>
-                      <td className="py-1 pr-2">{s.handsPlayed} hands ({formatMmSs(s.elapsedSec)})</td>
-                      <td className="py-1 pr-2 text-amber-300 font-bold">${s.finalBankroll}</td>
-                      <td className="py-1 pr-2">{s.meanDecisionRtMs}ms ({s.rtCvPct}%)</td>
-                      <td className="py-1 pr-2 text-emerald-300">{s.mathOptimalRate}%</td>
-                      <td className="py-1 pr-2">{s.upsideDownDetectionRate}%</td>
-                      <td className="py-1">
-                        {s.clockDurationSec !== null ? `${s.clockDurationSec}s (${s.clockNoonErrorDeg}°)` : '—'}
+                      <td className="py-1 pr-2">{s.ageYears}y / {s.educationYears}y</td>
+                      <td className="py-1 pr-2">{s.validEngagedHands} ({s.censoredDistractionHands} excl)</td>
+                      <td className="py-1 pr-2">{s.medianDecisionRtMs} ± {s.seMedianRtMs}ms</td>
+                      <td className="py-1 pr-2">{s.bowleySkewness} / {s.moorsKurtosisExcess}</td>
+                      <td className="py-1 pr-2 text-sky-300">{s.exGaussianTauMs}ms</td>
+                      <td className="py-1 font-extrabold text-amber-300">
+                        {s.compositeDemoZ >= 0 ? '+' : ''}{s.compositeDemoZ} SD ({s.compositePercentile}%)
                       </td>
                     </tr>
                   ))}
@@ -1536,10 +1678,6 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       </div>
     </div>
   );
-
-  function setBankrollBonus(amount: number) {
-    setBankroll((b) => b + amount);
-  }
 };
 
 export default BlackjackFiveMinGame;

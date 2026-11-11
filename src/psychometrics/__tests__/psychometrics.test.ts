@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  analyzeRobustRtDistribution,
+  computeDemographicNormedScore,
   computeGateG0TimingCalibration,
   computeMyCogRCS,
   computeNavonGlobalLocalMetrics,
@@ -337,5 +339,87 @@ describe('PostCircECD Psychometric & Statistical Engine (F4, F10, F11, F13, Gold
       { level: 'local', crowded: false, rtMs: 600, isCorrect: false }
     ]);
     expect(navonZeroLocal.gldiRatio).toBeNull();
+  });
+
+  it('9. Separates external clinic distractions/pauses from endogenous right-tail micro-lapses using Median, Bowley Skewness, Moors Kurtosis, and Ex-Gaussian tau', () => {
+    // 10 steady trials (~1000ms) + 1 explicit pause (9500ms) + 1 post-pause reorientation (2900ms) + 1 external waiting-room timeout (14500ms)
+    const steadyWithExternalDistractions = [
+      { trialNumber: 1, rtMs: 960, isCorrect: true },
+      { trialNumber: 2, rtMs: 990, isCorrect: true },
+      { trialNumber: 3, rtMs: 1010, isCorrect: true },
+      { trialNumber: 4, rtMs: 1030, isCorrect: true },
+      { trialNumber: 5, rtMs: 980, isCorrect: true },
+      { trialNumber: 6, rtMs: 1020, isCorrect: true },
+      { trialNumber: 7, rtMs: 9500, isCorrect: true, isPausedOrBlurred: true },
+      { trialNumber: 8, rtMs: 2900, isCorrect: true, postPauseWarmup: true },
+      { trialNumber: 9, rtMs: 14500, isCorrect: true, pointerIdleDuringTrial: true },
+      { trialNumber: 10, rtMs: 1000, isCorrect: true },
+      { trialNumber: 11, rtMs: 970, isCorrect: true },
+      { trialNumber: 12, rtMs: 1040, isCorrect: true },
+      { trialNumber: 13, rtMs: 995, isCorrect: true },
+      { trialNumber: 14, rtMs: 1015, isCorrect: true },
+      { trialNumber: 15, rtMs: 985, isCorrect: true }
+    ];
+
+    const reportClean = analyzeRobustRtDistribution(steadyWithExternalDistractions);
+    expect(reportClean.validEngagedCount).toBe(12);
+    expect(reportClean.censoredCount).toBe(3);
+    expect(reportClean.censorBreakdown.EXCLUDED_PAUSE_OR_BLUR).toBe(1);
+    expect(reportClean.censorBreakdown.EXCLUDED_POST_PAUSE_REORIENTATION).toBe(1);
+    expect(reportClean.censorBreakdown.EXCLUDED_EXTERNAL_DISTRACTION).toBe(1);
+    expect(reportClean.samplingAdequacy).toBe('HIGH_POWER_FULL_MOMENTS');
+    expect(reportClean.medianRtMs).toBeGreaterThanOrEqual(990);
+    expect(reportClean.medianRtMs).toBeLessThanOrEqual(1010);
+    expect(Math.abs(reportClean.bowleyQuantileSkewness)).toBeLessThan(0.2);
+
+    // Now test an engaged DLB fluctuation profile: 9 alert trials (~980-1080ms) + 5 engaged right-tail micro-lapses (2300-3400ms)
+    const dlbFluctuationSamples = [
+      { trialNumber: 1, rtMs: 980, isCorrect: true },
+      { trialNumber: 2, rtMs: 1010, isCorrect: true },
+      { trialNumber: 3, rtMs: 2450, isCorrect: true },
+      { trialNumber: 4, rtMs: 1020, isCorrect: true },
+      { trialNumber: 5, rtMs: 1040, isCorrect: true },
+      { trialNumber: 6, rtMs: 2850, isCorrect: true },
+      { trialNumber: 7, rtMs: 990, isCorrect: true },
+      { trialNumber: 8, rtMs: 1050, isCorrect: true },
+      { trialNumber: 9, rtMs: 3100, isCorrect: true },
+      { trialNumber: 10, rtMs: 1000, isCorrect: true },
+      { trialNumber: 11, rtMs: 2600, isCorrect: true },
+      { trialNumber: 12, rtMs: 1030, isCorrect: true },
+      { trialNumber: 13, rtMs: 3350, isCorrect: true },
+      { trialNumber: 14, rtMs: 1060, isCorrect: true }
+    ];
+    const reportDlb = analyzeRobustRtDistribution(dlbFluctuationSamples);
+    expect(reportDlb.validEngagedCount).toBe(14);
+    expect(reportDlb.q10LeadingEdgeMs).toBeLessThan(1010);
+    expect(reportDlb.bowleyQuantileSkewness).toBeGreaterThan(0.35);
+    expect(reportDlb.exGaussianTauMs).toBeGreaterThan(450);
+    expect(reportDlb.tailToModalRatio).toBeGreaterThan(0.35);
+  });
+
+  it('10. Scores identical raw game metrics appropriately across Age, Education, and Card Familiarity (High-Reserve Masking Detection)', () => {
+    const identicalObserved = {
+      medianRtMs: 1420,
+      exGaussianTauMs: 340,
+      bowleySkewness: 0.34,
+      mathOptimalRatePct: 80,
+      upsideDownDetectionRatePct: 81
+    };
+
+    // Patient A: 84yo, High School (12 yrs), rarely plays cards -> within normal expectations
+    const patient84Hs = computeDemographicNormedScore(
+      { ageYears: 84, educationYears: 12, gameFamiliarity: 'LOW' },
+      identicalObserved
+    );
+    expect(patient84Hs.compositeDemoZ).toBeGreaterThan(-0.9);
+    expect(patient84Hs.highReserveMaskingAlert).toBe(false);
+
+    // Patient B: 60yo, MD/JD/PhD (20 yrs), plays cards weekly -> flagged for High-Reserve Masking Decline!
+    const patient60Grad = computeDemographicNormedScore(
+      { ageYears: 60, educationYears: 20, gameFamiliarity: 'HIGH' },
+      identicalObserved
+    );
+    expect(patient60Grad.compositeDemoZ).toBeLessThanOrEqual(-1.35);
+    expect(patient60Grad.highReserveMaskingAlert).toBe(true);
   });
 });

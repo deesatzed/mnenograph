@@ -858,3 +858,406 @@ export function evaluateTwoLayerSyndromeRouter(
     holmBonferroniAdjustedFlags
   };
 }
+
+// ============================================================================
+// ROBUST RT DISTRIBUTION MOMENTS, DISTRACTION CENSORING & EX-GAUSSIAN ENGINE
+// Separates external clinic distractions/pauses from endogenous attentional
+// micro-lapses using Median (Q50), Leading-Edge Q10/Q25, MAD, IQR, SE_median,
+// Bowley Quantile Skewness, Fisher-Pearson Skewness (g1), Moors' Octile Kurtosis,
+// Excess Kurtosis (g2), and Ex-Gaussian (mu, sigma, tau) decomposition.
+// ============================================================================
+
+export interface RawRtSampleInput {
+  trialNumber: number;
+  rtMs: number;
+  isCorrect: boolean;
+  isPausedOrBlurred?: boolean;
+  postPauseWarmup?: boolean;
+  technicalFrameDrop?: boolean;
+  pointerIdleDuringTrial?: boolean;
+}
+
+export type TrialCensorReason =
+  | 'VALID_ENGAGED'
+  | 'EXCLUDED_PAUSE_OR_BLUR'
+  | 'EXCLUDED_POST_PAUSE_REORIENTATION'
+  | 'EXCLUDED_HARDWARE_FRAME_DROP'
+  | 'EXCLUDED_ANTICIPATORY_FAST'
+  | 'EXCLUDED_EXTERNAL_DISTRACTION';
+
+export interface RobustRtDistributionReport {
+  totalRawTrials: number;
+  validEngagedCount: number;
+  censoredCount: number;
+  censorBreakdown: Record<TrialCensorReason, number>;
+  samplingAdequacy: 'UNDER_SAMPLED' | 'ADEQUATE_FOR_MEDIAN_IQR' | 'HIGH_POWER_FULL_MOMENTS';
+  // Robust Location & Precision
+  medianRtMs: number;
+  seMedianRtMs: number;
+  q10LeadingEdgeMs: number;
+  q25Ms: number;
+  q75Ms: number;
+  q90SlowTailMs: number;
+  // Robust Dispersion
+  madRtMs: number;
+  iqrRtMs: number;
+  coMadRatio: number;
+  // Skewness (Asymmetry / Right-Tail Stretching)
+  bowleyQuantileSkewness: number; // [-1, +1], immune to single extreme outliers
+  sampleSkewnessG1: number | null; // Requires N >= 8
+  // Kurtosis (Tail Heaviness / Leptokurtic Micro-Lapses)
+  moorsOctileKurtosisExcess: number; // Centered at 0 (Gaussian = 1.23)
+  sampleExcessKurtosisG2: number | null; // Requires N >= 8
+  // Ex-Gaussian Decomposition (RT = Gaussian(mu, sigma) + Exponential(tau))
+  exGaussianMuMs: number; // Baseline modal motor/perceptual speed
+  exGaussianSigmaMs: number; // Baseline Gaussian variability
+  exGaussianTauMs: number; // Exponential right-tail attentional lapse parameter
+  tailToModalRatio: number; // tau / mu
+  clinicalDistributionInterpretation: string;
+}
+
+export function computeQuantile(sortedValues: readonly number[], p: number): number {
+  if (sortedValues.length === 0) return 0;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const clampedP = Math.min(1, Math.max(0, p));
+  const pos = (sortedValues.length - 1) * clampedP;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sortedValues[base + 1] !== undefined) {
+    return sortedValues[base] + rest * (sortedValues[base + 1] - sortedValues[base]);
+  }
+  return sortedValues[base];
+}
+
+export function analyzeRobustRtDistribution(
+  samples: readonly RawRtSampleInput[]
+): RobustRtDistributionReport {
+  const breakdown: Record<TrialCensorReason, number> = {
+    VALID_ENGAGED: 0,
+    EXCLUDED_PAUSE_OR_BLUR: 0,
+    EXCLUDED_POST_PAUSE_REORIENTATION: 0,
+    EXCLUDED_HARDWARE_FRAME_DROP: 0,
+    EXCLUDED_ANTICIPATORY_FAST: 0,
+    EXCLUDED_EXTERNAL_DISTRACTION: 0
+  };
+
+  // Pass 1: Filter explicit hardware, pause/blur, post-pause warmup, and <150ms anticipatory taps
+  const stage1Candidates: RawRtSampleInput[] = [];
+  for (const s of samples) {
+    if (s.isPausedOrBlurred) {
+      breakdown.EXCLUDED_PAUSE_OR_BLUR += 1;
+    } else if (s.postPauseWarmup) {
+      breakdown.EXCLUDED_POST_PAUSE_REORIENTATION += 1;
+    } else if (s.technicalFrameDrop) {
+      breakdown.EXCLUDED_HARDWARE_FRAME_DROP += 1;
+    } else if (s.rtMs < 150) {
+      breakdown.EXCLUDED_ANTICIPATORY_FAST += 1;
+    } else {
+      stage1Candidates.push(s);
+    }
+  }
+
+  const prelimRts = stage1Candidates.filter((s) => s.rtMs <= 10000).map((s) => s.rtMs);
+  const prelimMedian = prelimRts.length > 0 ? computeMedian(prelimRts) : 1200;
+  const prelimMad = prelimRts.length > 0 ? Math.max(40, computeMAD(prelimRts, prelimMedian)) : 200;
+
+  // Pass 2: Separate external clinic distraction (>10,000ms OR > Median + 4.5*MAD with idle pointer)
+  // from true endogenous cognitive micro-lapses (1.8x to 4.5x Median while actively engaged)
+  const cleanRts: number[] = [];
+  for (const s of stage1Candidates) {
+    const isExtremeTimeout = s.rtMs > 10000;
+    const isDisengagedOutlier =
+      Boolean(s.pointerIdleDuringTrial) && s.rtMs > prelimMedian + 4.5 * prelimMad;
+    const isUnboundedSpike = s.rtMs > prelimMedian + 7.5 * prelimMad && s.rtMs > 7500;
+
+    if (isExtremeTimeout || isDisengagedOutlier || isUnboundedSpike) {
+      breakdown.EXCLUDED_EXTERNAL_DISTRACTION += 1;
+    } else {
+      breakdown.VALID_ENGAGED += 1;
+      cleanRts.push(s.rtMs);
+    }
+  }
+
+  const n = cleanRts.length;
+  const censoredCount = samples.length - n;
+
+  if (n === 0) {
+    return {
+      totalRawTrials: samples.length,
+      validEngagedCount: 0,
+      censoredCount,
+      censorBreakdown: breakdown,
+      samplingAdequacy: 'UNDER_SAMPLED',
+      medianRtMs: 0,
+      seMedianRtMs: 0,
+      q10LeadingEdgeMs: 0,
+      q25Ms: 0,
+      q75Ms: 0,
+      q90SlowTailMs: 0,
+      madRtMs: 0,
+      iqrRtMs: 0,
+      coMadRatio: 0,
+      bowleyQuantileSkewness: 0,
+      sampleSkewnessG1: null,
+      moorsOctileKurtosisExcess: 0,
+      sampleExcessKurtosisG2: null,
+      exGaussianMuMs: 0,
+      exGaussianSigmaMs: 0,
+      exGaussianTauMs: 0,
+      tailToModalRatio: 0,
+      clinicalDistributionInterpretation: 'Insufficient engaged trials collected yet.'
+    };
+  }
+
+  const sorted = [...cleanRts].sort((a, b) => a - b);
+  const q10 = computeQuantile(sorted, 0.1);
+  const q25 = computeQuantile(sorted, 0.25);
+  const median = computeQuantile(sorted, 0.5);
+  const q75 = computeQuantile(sorted, 0.75);
+  const q90 = computeQuantile(sorted, 0.9);
+
+  const mad = computeMAD(sorted, median);
+  const iqr = Math.max(1, q75 - q25);
+  const coMad = median > 0 ? mad / median : 0;
+  // Asymptotic SE of the Median using robust normal-consistent MAD (1.4826 * MAD / sqrt(n))
+  const seMedian = (1.4826 * mad) / Math.sqrt(n);
+
+  // Bowley Non-Parametric Quantile Skewness: ((Q75 - Q50) - (Q50 - Q25)) / (Q75 - Q25)
+  const bowleySkew = q75 > q25 ? ((q75 - median) - (median - q25)) / (q75 - q25) : 0;
+
+  // Moors' Octile Kurtosis: ((E7 - E5) + (E3 - E1)) / (E6 - E2) - 1.23 (Gaussian baseline = 1.23)
+  const e1 = computeQuantile(sorted, 0.125);
+  const e2 = computeQuantile(sorted, 0.25);
+  const e3 = computeQuantile(sorted, 0.375);
+  const e5 = computeQuantile(sorted, 0.625);
+  const e6 = computeQuantile(sorted, 0.75);
+  const e7 = computeQuantile(sorted, 0.875);
+  const rawMoors = e6 > e2 ? ((e7 - e5) + (e3 - e1)) / (e6 - e2) : 1.23;
+  const moorsExcess = rawMoors - 1.23;
+
+  // Parametric Higher Moments (Sample Skewness g1 & Sample Excess Kurtosis g2 on distraction-censored data)
+  const mean = sorted.reduce((acc, v) => acc + v, 0) / n;
+  let m2 = 0;
+  let m3 = 0;
+  let m4 = 0;
+  for (const x of sorted) {
+    const d = x - mean;
+    const d2 = d * d;
+    m2 += d2;
+    m3 += d2 * d;
+    m4 += d2 * d2;
+  }
+  m2 /= n;
+  m3 /= n;
+  m4 /= n;
+  const sd = Math.sqrt(Math.max(1, m2));
+
+  let g1: number | null = null;
+  let g2: number | null = null;
+  if (n >= 6 && m2 > 1) {
+    const rawSkew = m3 / Math.pow(m2, 1.5);
+    g1 = Number((((Math.sqrt(n * (n - 1))) / (n - 2)) * rawSkew).toFixed(3));
+    if (n >= 8) {
+      const rawKurt = m4 / (m2 * m2);
+      g2 = Number(
+        ((((n - 1) / ((n - 2) * (n - 3))) * ((n + 1) * rawKurt - 3 * (n - 1)))).toFixed(3)
+      );
+    }
+  }
+
+  // Ex-Gaussian Decomposition (Method of Moments protected by non-parametric quantile bounds)
+  const effectiveSkew = Math.max(0, g1 ?? Math.max(0, bowleySkew * 2.2));
+  const rawTau = sd * Math.pow(effectiveSkew / 2, 1 / 3);
+  const tau = Math.min(sd * 0.95, Math.max(0, rawTau));
+  const mu = Math.max(q10 * 0.85, mean - tau);
+  const sigma = Math.sqrt(Math.max(25, sd * sd - tau * tau));
+  const tailToModalRatio = mu > 0 ? tau / mu : 0;
+
+  const samplingAdequacy =
+    n < 8 ? 'UNDER_SAMPLED' : n < 12 ? 'ADEQUATE_FOR_MEDIAN_IQR' : 'HIGH_POWER_FULL_MOMENTS';
+
+  let interpretation =
+    'Symmetric, tightly clustered pacing (low right-tail skew & normal Ex-Gaussian tau).';
+  if (tailToModalRatio >= 0.35 || bowleySkew >= 0.28 || moorsExcess >= 0.35) {
+    interpretation =
+      'Right-skewed, heavy-tailed RT distribution (elevated Ex-Gaussian tau & Bowley skew despite fast leading-edge Q10): indicates periodic endogenous attentional micro-lapses rather than uniform motor slowing.';
+  } else if (mu >= 1550 && tailToModalRatio < 0.25) {
+    interpretation =
+      'Uniform baseline shift (elevated modal mu with low skew/tau): consistent with peripheral motor/arthritis pacing rather than cognitive fluctuation.';
+  }
+
+  return {
+    totalRawTrials: samples.length,
+    validEngagedCount: n,
+    censoredCount,
+    censorBreakdown: breakdown,
+    samplingAdequacy,
+    medianRtMs: Math.round(median),
+    seMedianRtMs: Math.round(seMedian),
+    q10LeadingEdgeMs: Math.round(q10),
+    q25Ms: Math.round(q25),
+    q75Ms: Math.round(q75),
+    q90SlowTailMs: Math.round(q90),
+    madRtMs: Math.round(mad),
+    iqrRtMs: Math.round(iqr),
+    coMadRatio: Number(coMad.toFixed(3)),
+    bowleyQuantileSkewness: Number(bowleySkew.toFixed(3)),
+    sampleSkewnessG1: g1,
+    moorsOctileKurtosisExcess: Number(moorsExcess.toFixed(3)),
+    sampleExcessKurtosisG2: g2,
+    exGaussianMuMs: Math.round(mu),
+    exGaussianSigmaMs: Math.round(sigma),
+    exGaussianTauMs: Math.round(tau),
+    tailToModalRatio: Number(tailToModalRatio.toFixed(3)),
+    clinicalDistributionInterpretation: interpretation
+  };
+}
+
+// ============================================================================
+// DEMOGRAPHIC & PREMORBID COGNITIVE RESERVE NORMATIVE SCORING ENGINE
+// Adjusts observed game metrics for Age (linear + quadratic >70), Educational
+// Attainment (Years / Reserve Tier), and Prior Card/Game Familiarity.
+// ============================================================================
+
+export interface DemographicProfileInput {
+  ageYears: number; // e.g., 50..92
+  educationYears: number; // 10=Some HS, 12=HS, 14=Assoc/Trade, 16=Bachelor, 18=Master, 20=MD/JD/PhD
+  gameFamiliarity: 'LOW' | 'MODERATE' | 'HIGH';
+}
+
+export interface DemographicNormedScoreReport {
+  profile: DemographicProfileInput;
+  expectedMedianRtMs: number;
+  expectedTauLapseMs: number;
+  expectedMathAccuracyPct: number;
+  zProcessingSpeedModal: number; // Based on Median / Ex-Gaussian Mu vs Age/Edu/Familiarity
+  zAttentionalStabilityTail: number; // Based on Ex-Gaussian Tau & Bowley Skew
+  zExecutiveMathAccuracy: number; // Adjusted for Education & Card Familiarity
+  zVisuospatialOrientation: number; // Upside-down 180° detection & 4-corner symmetry
+  compositeDemoZ: number;
+  compositePercentile: number;
+  highReserveMaskingAlert: boolean;
+  normativeSummaryText: string;
+}
+
+function zToPercentile(z: number): number {
+  // Abramowitz & Stegun normal CDF approximation
+  const clamped = Math.max(-3.5, Math.min(3.5, z));
+  const t = 1 / (1 + 0.2316419 * Math.abs(clamped));
+  const d = 0.3989423 * Math.exp((-clamped * clamped) / 2);
+  const prob =
+    d *
+    t *
+    (0.3193815 +
+      t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  const cdf = clamped >= 0 ? 1 - prob : prob;
+  return Math.min(99, Math.max(1, Math.round(cdf * 100)));
+}
+
+export function computeDemographicNormedScore(
+  profile: DemographicProfileInput,
+  observed: {
+    medianRtMs: number;
+    exGaussianTauMs: number;
+    bowleySkewness: number;
+    mathOptimalRatePct: number;
+    upsideDownDetectionRatePct: number;
+  }
+): DemographicNormedScoreReport {
+  const ageCentered = profile.ageYears - 70;
+  const ageQuad = Math.max(0, profile.ageYears - 70) ** 2;
+  const eduCentered = profile.educationYears - 14; // Centered at 14 yrs (Some College / Assoc)
+  const famBonusMs =
+    profile.gameFamiliarity === 'HIGH'
+      ? -110
+      : profile.gameFamiliarity === 'LOW'
+      ? 130
+      : 0;
+  const famMathBonusPct =
+    profile.gameFamiliarity === 'HIGH'
+      ? 4.0
+      : profile.gameFamiliarity === 'LOW'
+      ? -5.0
+      : 0;
+
+  // 1. Expected Median Decision RT (ms):
+  // At Age 70, 14 yrs edu, moderate familiarity -> ~1,150ms
+  // Slows with age (+12ms/yr + 0.45ms/yr^2 >70); speeds up with higher edu (-18ms/yr)
+  const expectedMedianRtMs = Math.round(
+    1150 + 12 * ageCentered + 0.45 * ageQuad - 18 * eduCentered + famBonusMs
+  );
+  const sdMedianRtMs = 210;
+  // Lower RT is faster -> positive Z when observed < expected
+  const zProcessingSpeedModal = Number(
+    ((expectedMedianRtMs - observed.medianRtMs) / sdMedianRtMs).toFixed(2)
+  );
+
+  // 2. Expected Ex-Gaussian Tau (Right-Tail Lapse Parameter in ms):
+  // Healthy aging increases tau only modestly; education has minimal effect on raw attentional lapses
+  const expectedTauLapseMs = Math.round(190 + 2.2 * Math.max(0, ageCentered) + 0.12 * ageQuad);
+  const sdTauMs = 95;
+  const skewPenalty = Math.max(0, observed.bowleySkewness - 0.2) * 1.2;
+  const zAttentionalStabilityTail = Number(
+    ((expectedTauLapseMs - observed.exGaussianTauMs) / sdTauMs - skewPenalty).toFixed(2)
+  );
+
+  // 3. Expected Blackjack 21 Math & Soft-Ace Optimality (%):
+  // Scales strongly with Education Reserve (+1.4% per yr of edu) and Card Familiarity
+  const expectedMathAccuracyPct = Math.min(
+    96,
+    Math.max(
+      72,
+      Math.round(86 - 0.18 * Math.max(0, ageCentered) + 1.4 * eduCentered + famMathBonusPct)
+    )
+  );
+  const sdMathPct = 7.5;
+  const zExecutiveMathAccuracy = Number(
+    ((observed.mathOptimalRatePct - expectedMathAccuracyPct) / sdMathPct).toFixed(2)
+  );
+
+  // 4. Expected 180° Upside-Down Card Orientation Detection (%):
+  // Should remain high (>88%) across education tiers; sensitive to posterior visuospatial decline
+  const expectedUpsideDownPct = Math.max(82, Math.round(92 - 0.2 * Math.max(0, ageCentered)));
+  const zVisuospatialOrientation = Number(
+    ((observed.upsideDownDetectionRatePct - expectedUpsideDownPct) / 9.0).toFixed(2)
+  );
+
+  const compositeDemoZ = Number(
+    (
+      0.25 * zProcessingSpeedModal +
+      0.3 * zAttentionalStabilityTail +
+      0.25 * zExecutiveMathAccuracy +
+      0.2 * zVisuospatialOrientation
+    ).toFixed(2)
+  );
+  const compositePercentile = zToPercentile(compositeDemoZ);
+
+  // High-Reserve Masking Alert: Patient has >=16 yrs education, raw accuracy looks passable (>=78%),
+  // yet their age+education adjusted Z is <= -1.35 SD!
+  const highReserveMaskingAlert =
+    profile.educationYears >= 16 &&
+    observed.mathOptimalRatePct >= 75 &&
+    compositeDemoZ <= -1.35;
+
+  let normativeSummaryText = `Within expected range for Age ${profile.ageYears}, ${profile.educationYears} yrs education (${compositePercentile}th percentile, Z = ${compositeDemoZ >= 0 ? '+' : ''}${compositeDemoZ}).`;
+  if (highReserveMaskingAlert) {
+    normativeSummaryText = `High Cognitive Reserve Alert: Raw score appears passable, but performance is ${compositeDemoZ} SD (${compositePercentile}th percentile) below expected ceiling for Age ${profile.ageYears} with ${profile.educationYears} yrs education.`;
+  } else if (compositeDemoZ <= -1.5) {
+    normativeSummaryText = `Below expected baseline for Age ${profile.ageYears}, ${profile.educationYears} yrs education (${compositePercentile}th percentile, Z = ${compositeDemoZ}).`;
+  }
+
+  return {
+    profile,
+    expectedMedianRtMs,
+    expectedTauLapseMs,
+    expectedMathAccuracyPct,
+    zProcessingSpeedModal,
+    zAttentionalStabilityTail,
+    zExecutiveMathAccuracy,
+    zVisuospatialOrientation,
+    compositeDemoZ,
+    compositePercentile,
+    highReserveMaskingAlert,
+    normativeSummaryText
+  };
+}
