@@ -52,14 +52,20 @@ export interface HandRecord {
 
 export interface SavedBlackjackSessionSummary {
   sessionId: string;
+  playerLabel: string;
   timestampIso: string;
   ageYears: number;
   educationYears: number;
+  gameFamiliarity: 'LOW' | 'MODERATE' | 'HIGH';
+  targetCapSec: number;
   handsPlayed: number;
   validEngagedHands: number;
   censoredDistractionHands: number;
   elapsedSec: number;
   finalBankroll: number;
+  motorBaselineRtMs: number;
+  cognitiveMedianRtMs: number;
+  fatigueSlopeMsPerHand: number;
   medianDecisionRtMs: number;
   seMedianRtMs: number;
   madRtMs: number;
@@ -68,6 +74,10 @@ export interface SavedBlackjackSessionSummary {
   exGaussianTauMs: number;
   mathOptimalRate: number;
   upsideDownDetectionRate: number;
+  implicitAnchorSavingsMs: number | null;
+  discardSnapHits: number;
+  discardSnapOpportunities: number;
+  discardPeekCount: number;
   compositeDemoZ: number;
   compositePercentile: number;
   clockNoonErrorDeg: number | null;
@@ -291,16 +301,20 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   onUpdateStationTelemetry,
   onFinishSession
 }) => {
-  // Demographic & Premorbid Cognitive Reserve Baseline Profile
+  // Player / Family Member Label & Demographic Baseline Profile
+  const [playerLabel, setPlayerLabel] = useState<string>('Me (Primary Tester)');
   const [demoProfile, setDemoProfile] = useState<DemographicProfileInput>({
-    ageYears: 72,
+    ageYears: 65,
     educationYears: 16, // 12=High School, 14=Some College/Trade, 16=Bachelor's, 18=Master's, 20=MD/JD/PhD
     gameFamiliarity: 'MODERATE'
   });
 
-  // 5-Minute (300 second) Shoe Clock
+  // Strict Wall-Clock Appointment Time Cap (120s Fast Test, 210s Clinic Pillar, 300s 5-Min Shoe)
+  const [targetDurationSec, setTargetDurationSec] = useState<number>(300);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [showTesterLab, setShowTesterLab] = useState<boolean>(false);
+  const autoSavedCurrentShoeRef = useRef<boolean>(false);
 
   // Real-World Distraction / Window Blur / Post-Pause Re-Orientation State
   const [hadInterruptionThisHand, setHadInterruptionThisHand] = useState<boolean>(false);
@@ -314,13 +328,14 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [doublePayoutActive, setDoublePayoutActive] = useState<boolean>(false);
   const [handNumber, setHandNumber] = useState<number>(1);
 
-  // Table Stages (NO interrupting quiz popups! Only continuous Blackjack + optional 30s Happy Hour Clock!)
+  // Table Stages (NO interrupting quiz popups! Includes automatic SHOE_COMPLETE_SUMMARY wrap-up at time cap!)
   const [tableStage, setTableStage] = useState<
     | 'WARMUP_INTRO'
     | 'PLACE_CORNER_BET'
     | 'PLAYER_TURN'
     | 'HAND_RESULT'
     | 'PIT_CLOCK_NOON_BONUS'
+    | 'SHOE_COMPLETE_SUMMARY'
   >('WARMUP_INTRO');
 
   const [playerHand, setPlayerHand] = useState<BlackjackCard[]>([]);
@@ -403,9 +418,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     };
   }, []);
 
-  // 5-Minute Shoe Wall-Clock Timer
+  // Strict Wall-Clock Shoe Timer (Stops on WARMUP_INTRO, Pause, or SHOE_COMPLETE_SUMMARY)
   useEffect(() => {
-    if (tableStage === 'WARMUP_INTRO' || isPaused) return;
+    if (tableStage === 'WARMUP_INTRO' || tableStage === 'SHOE_COMPLETE_SUMMARY' || isPaused) return;
     const id = window.setInterval(() => {
       setElapsedSec((s) => s + 1);
     }, 1000);
@@ -418,7 +433,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // Compute Robust RT Distribution Moments (Median, Q10, MAD, IQR, Bowley Skewness, Moors Kurtosis, Ex-Gaussian Mu/Sigma/Tau)
+  // Compute Robust RT Distribution Moments (Median, Q10, MAD, IQR, Bowley Skewness, Moors Kurtosis, Ex-Gaussian Mu/Sigma/Tau),
+  // Invisible Motor Baseline Subtraction (RT_motor from natural deal taps), Within-Window Fatigue Slope,
   // and Age + Education Normative Z-scores!
   const telemetryAnalytics = useMemo(() => {
     const rawSamples: RawRtSampleInput[] = handRecords.map((h) => ({
@@ -433,6 +449,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
     const dist = analyzeRobustRtDistribution(rawSamples);
 
+    const engagedHands = handRecords.filter((h) => !h.isPausedOrBlurred && !h.postPauseWarmup);
     const n = handRecords.length;
     const mathHits = handRecords.filter((h) => h.mathOptimalDecision).length;
     const mathRatePct = n > 0 ? Math.round((mathHits / n) * 100) : 100;
@@ -441,12 +458,39 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     const udSpotted = handRecords.filter((h) => h.upsideDownPresent && h.upsideDownSpotted).length;
     const udRatePct = udOpps > 0 ? Math.round((udSpotted / udOpps) * 100) : 100;
 
+    // Invisible Motor Baseline (RT_motor): Extracted from natural Corner-Chip Deal taps (zero calibration screen!)
+    const sortedDealTaps = engagedHands
+      .map((h) => h.betPlacementRtMs)
+      .filter((rt) => rt >= 150 && rt <= 4500)
+      .sort((a, b) => a - b);
+    const rawMotorTapMs =
+      sortedDealTaps.length > 0
+        ? sortedDealTaps[Math.min(sortedDealTaps.length - 1, Math.floor(sortedDealTaps.length * 0.25))]
+        : 340;
+    const motorBaselineRtMs = Math.min(580, Math.max(200, Math.round(rawMotorTapMs * 0.55)));
+    const cognitiveMedianRtMs =
+      dist.medianRtMs > 0 ? Math.max(160, Math.round(dist.medianRtMs - motorBaselineRtMs)) : 0;
+
+    // Within-Window Fatigue / Vigilance Slope (ms per hand via OLS across engaged hands)
+    let fatigueSlopeMsPerHand = 0;
+    if (engagedHands.length >= 3) {
+      const k = engagedHands.length;
+      const meanX = (k + 1) / 2;
+      const meanY = engagedHands.reduce((acc, h) => acc + h.decisionRtMs, 0) / k;
+      let num = 0;
+      let den = 0;
+      engagedHands.forEach((h, idx) => {
+        const dx = idx + 1 - meanX;
+        num += dx * (h.decisionRtMs - meanY);
+        den += dx * dx;
+      });
+      fatigueSlopeMsPerHand = den > 0 ? Math.round(num / den) : 0;
+    }
+
     // 4-Corner Bet Quadrant MEDIANS (never means!)
     const byQ: Record<'Q1' | 'Q2' | 'Q3' | 'Q4', number[]> = { Q1: [], Q2: [], Q3: [], Q4: [] };
-    for (const h of handRecords) {
-      if (!h.isPausedOrBlurred && !h.postPauseWarmup) {
-        byQ[h.betQuadrant].push(h.betPlacementRtMs);
-      }
+    for (const h of engagedHands) {
+      byQ[h.betQuadrant].push(h.betPlacementRtMs);
     }
     const med = (arr: number[]) => {
       if (arr.length === 0) return 0;
@@ -469,9 +513,48 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       upsideDownDetectionRatePct: udRatePct
     });
 
+    // Compare against prior saved sessions for this exact Player/Family Member to test Signal vs. Noise Reproducibility
+    const samePersonRuns = savedSessions.filter(
+      (s) => s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() && s.validEngagedHands >= 3
+    );
+    let reproducibilitySummary: {
+      hasBaseline: boolean;
+      baselineMedianMs: number | null;
+      deltaMedianMs: number | null;
+      srbZ: number | null;
+      verdictText: string;
+    } = {
+      hasBaseline: false,
+      baselineMedianMs: null,
+      deltaMedianMs: null,
+      srbZ: null,
+      verdictText:
+        'First baseline session for this player — complete & save this run, then play a 2nd run to test within-person reproducibility.'
+    };
+
+    if (samePersonRuns.length > 0 && dist.validEngagedCount >= 3) {
+      const baseRun = samePersonRuns[samePersonRuns.length - 1]; // Earliest baseline run for this person
+      const deltaMs = dist.medianRtMs - baseRun.medianDecisionRtMs;
+      const pooledSe = Math.max(45, Math.hypot(dist.seMedianRtMs || 60, baseRun.seMedianRtMs || 60));
+      const srbZ = Number((deltaMs / (pooledSe * 1.414)).toFixed(2));
+      const isReproducible = Math.abs(srbZ) <= 1.65;
+      reproducibilitySummary = {
+        hasBaseline: true,
+        baselineMedianMs: baseRun.medianDecisionRtMs,
+        deltaMedianMs: deltaMs,
+        srbZ,
+        verdictText: isReproducible
+          ? `✅ REPRODUCIBLE SIGNAL (|Z_SRB| = ${Math.abs(srbZ)} ≤ 1.65): Median RT (${dist.medianRtMs}ms) tracks closely with ${playerLabel}'s baseline (${baseRun.medianDecisionRtMs}ms, Δ=${deltaMs >= 0 ? '+' : ''}${deltaMs}ms). Low random noise!`
+          : `⚠️ SIGNIFICANT SHIFT FROM PERSONAL BASELINE (Z_SRB = ${srbZ >= 0 ? '+' : ''}${srbZ}): Median RT shifted by ${deltaMs >= 0 ? '+' : ''}${deltaMs}ms vs. baseline (${baseRun.medianDecisionRtMs}ms). Check if intentional test perturbation or fatigue.`
+      };
+    }
+
     return {
       dist,
       handsPlayed: n,
+      motorBaselineRtMs,
+      cognitiveMedianRtMs,
+      fatigueSlopeMsPerHand,
       mathOptimalRatePct: mathRatePct,
       upsideDownOpportunities: udOpps,
       upsideDownSpotted: udSpotted,
@@ -483,9 +566,10 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
         Q3: med(byQ.Q3),
         Q4: med(byQ.Q4)
       },
-      demoNorms
+      demoNorms,
+      reproducibilitySummary
     };
-  }, [handRecords, demoProfile]);
+  }, [handRecords, demoProfile, savedSessions, playerLabel]);
 
   // Synchronize live Blackjack telemetry into the main PostCircECD StationTelemetryMap
   const syncAllTelemetryToApp = (
@@ -888,7 +972,80 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     finalizeHand(nextHand, 'DOUBLE', currentBet * 2);
   };
 
+  const handleSaveSessionSnapshot = (): SavedBlackjackSessionSummary => {
+    const { dist, demoNorms } = telemetryAnalytics;
+    const snap: SavedBlackjackSessionSummary = {
+      sessionId: `BJ-${Date.now().toString().slice(-5)}`,
+      playerLabel: playerLabel.trim() || 'Me (Primary Tester)',
+      timestampIso: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      ageYears: demoProfile.ageYears,
+      educationYears: demoProfile.educationYears,
+      gameFamiliarity: demoProfile.gameFamiliarity,
+      targetCapSec: targetDurationSec,
+      handsPlayed: telemetryAnalytics.handsPlayed,
+      validEngagedHands: dist.validEngagedCount,
+      censoredDistractionHands: dist.censoredCount,
+      elapsedSec,
+      finalBankroll: bankroll,
+      motorBaselineRtMs: telemetryAnalytics.motorBaselineRtMs,
+      cognitiveMedianRtMs: telemetryAnalytics.cognitiveMedianRtMs,
+      fatigueSlopeMsPerHand: telemetryAnalytics.fatigueSlopeMsPerHand,
+      medianDecisionRtMs: dist.medianRtMs,
+      seMedianRtMs: dist.seMedianRtMs,
+      madRtMs: dist.madRtMs,
+      bowleySkewness: dist.bowleyQuantileSkewness,
+      moorsKurtosisExcess: dist.moorsOctileKurtosisExcess,
+      exGaussianTauMs: dist.exGaussianTauMs,
+      mathOptimalRate: telemetryAnalytics.mathOptimalRatePct,
+      upsideDownDetectionRate: telemetryAnalytics.upsideDownDetectionRatePct,
+      implicitAnchorSavingsMs: telemetryAnalytics.implicitSavingsMs,
+      discardSnapHits,
+      discardSnapOpportunities,
+      discardPeekCount,
+      compositeDemoZ: demoNorms.compositeDemoZ,
+      compositePercentile: demoNorms.compositePercentile,
+      clockNoonErrorDeg,
+      clockDurationSec
+    };
+    const next = [snap, ...savedSessions].slice(0, 24);
+    setSavedSessions(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Ignore storage quota issues
+    }
+    return snap;
+  };
+
+  const handleCompleteShoeAndSave = () => {
+    if (!autoSavedCurrentShoeRef.current && handRecords.length > 0) {
+      autoSavedCurrentShoeRef.current = true;
+      handleSaveSessionSnapshot();
+    }
+    setShowTesterLab(true);
+    setTableStage('SHOE_COMPLETE_SUMMARY');
+  };
+
+  // Graceful Wall-Clock Time Cap Auto-Wrap-Up:
+  // If timer reaches targetDurationSec while waiting to deal the next hand, wrap up immediately.
+  // If the player is mid-hand (PLAYER_TURN), let them finish the current hand first!
+  useEffect(() => {
+    if (
+      elapsedSec >= targetDurationSec &&
+      tableStage === 'PLACE_CORNER_BET' &&
+      handRecords.length > 0
+    ) {
+      handleCompleteShoeAndSave();
+    }
+  }, [elapsedSec, targetDurationSec, tableStage, handRecords.length]);
+
   const handleAdvanceToNextHand = () => {
+    // If appointment time cap has been reached, wrap up gracefully right after finishing this hand!
+    if (elapsedSec >= targetDurationSec && handRecords.length > 0) {
+      handleCompleteShoeAndSave();
+      return;
+    }
+
     const nextNum = handNumber + 1;
     const corners: ('Q1' | 'Q2' | 'Q3' | 'Q4')[] = ['Q2', 'Q1', 'Q3', 'Q4'];
     setActiveBetCorner(corners[nextNum % 4]);
@@ -908,75 +1065,195 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     setTableStage('PLACE_CORNER_BET');
   };
 
-  const handleSaveSessionSnapshot = () => {
-    const { dist, demoNorms } = telemetryAnalytics;
-    const snap: SavedBlackjackSessionSummary = {
-      sessionId: `BJ-${Date.now().toString().slice(-5)}`,
-      timestampIso: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      ageYears: demoProfile.ageYears,
-      educationYears: demoProfile.educationYears,
-      handsPlayed: telemetryAnalytics.handsPlayed,
-      validEngagedHands: dist.validEngagedCount,
-      censoredDistractionHands: dist.censoredCount,
-      elapsedSec,
-      finalBankroll: bankroll,
-      medianDecisionRtMs: dist.medianRtMs,
-      seMedianRtMs: dist.seMedianRtMs,
-      madRtMs: dist.madRtMs,
-      bowleySkewness: dist.bowleyQuantileSkewness,
-      moorsKurtosisExcess: dist.moorsOctileKurtosisExcess,
-      exGaussianTauMs: dist.exGaussianTauMs,
-      mathOptimalRate: telemetryAnalytics.mathOptimalRatePct,
-      upsideDownDetectionRate: telemetryAnalytics.upsideDownDetectionRatePct,
-      compositeDemoZ: demoNorms.compositeDemoZ,
-      compositePercentile: demoNorms.compositePercentile,
-      clockNoonErrorDeg,
-      clockDurationSec
+  const handleResetForNewRun = () => {
+    autoSavedCurrentShoeRef.current = false;
+    setElapsedSec(0);
+    setIsPaused(false);
+    setShoe(buildShuffledShoe(savedSessions.length + 2));
+    setBankroll(1000);
+    setCurrentBet(25);
+    setDoublePayoutActive(false);
+    setHandNumber(1);
+    setPlayerHand([]);
+    setDealerHand([]);
+    setDealerHoleRevealed(false);
+    setHandRecords([]);
+    setLastDiscardTopCard(null);
+    setDiscardPeekOpen(false);
+    setDiscardPeekCount(0);
+    setDiscardSnapHits(0);
+    setDiscardSnapOpportunities(0);
+    setDiscardSnapClaimedThisHand(false);
+    setClockCompletedOnce(false);
+    setClockPlacedHours([]);
+    setClockNoonHandDeg(null);
+    setClockDurationSec(null);
+    setClockNoonErrorDeg(null);
+    setFalseFlipTaps(0);
+    setShowTesterLab(false);
+    cornerOnsetRef.current = performance.now();
+    setTableStage('PLACE_CORNER_BET');
+  };
+
+  const handleExportSessionsJson = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      currentPlayerLabel: playerLabel,
+      savedSessions,
+      currentRunHandRecords: handRecords
     };
-    const next = [snap, ...savedSessions].slice(0, 8);
-    setSavedSessions(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // Ignore storage quota issues
-    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `postcircecd_family_test_runs_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportSessionsCsv = () => {
+    const headers = [
+      'SessionID',
+      'PlayerLabel',
+      'Time',
+      'Age',
+      'EduYrs',
+      'Familiarity',
+      'ElapsedSec',
+      'EngagedHands',
+      'CensoredHands',
+      'MotorBaselineMs',
+      'CognitiveMedianMs',
+      'RawMedianMs',
+      'SE_MedianMs',
+      'MAD_Ms',
+      'BowleySkew',
+      'MoorsKurt',
+      'ExGaussTauMs',
+      'FatigueSlopeMsPerHand',
+      'MathOptimalPct',
+      'UpsideDownFlipPct',
+      'AnchorSavingsMs',
+      'DiscardSnapHits',
+      'DiscardPeeks',
+      'ClockNoonErrDeg',
+      'ClockSec',
+      'Z_demo',
+      'Percentile'
+    ];
+    const rows = savedSessions.map((s) =>
+      [
+        s.sessionId,
+        `"${(s.playerLabel || 'Tester').replace(/"/g, '""')}"`,
+        s.timestampIso,
+        s.ageYears,
+        s.educationYears,
+        s.gameFamiliarity || 'MODERATE',
+        s.elapsedSec,
+        s.validEngagedHands,
+        s.censoredDistractionHands,
+        s.motorBaselineRtMs ?? 320,
+        s.cognitiveMedianRtMs ?? s.medianDecisionRtMs,
+        s.medianDecisionRtMs,
+        s.seMedianRtMs,
+        s.madRtMs,
+        s.bowleySkewness,
+        s.moorsKurtosisExcess,
+        s.exGaussianTauMs,
+        s.fatigueSlopeMsPerHand ?? 0,
+        s.mathOptimalRate,
+        s.upsideDownDetectionRate,
+        s.implicitAnchorSavingsMs ?? '',
+        s.discardSnapHits ?? 0,
+        s.discardPeekCount ?? 0,
+        s.clockNoonErrorDeg ?? '',
+        s.clockDurationSec ?? '',
+        s.compositeDemoZ,
+        s.compositePercentile
+      ].join(',')
+    );
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `postcircecd_family_test_runs_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const pEval = evaluateBlackjackHand(playerHand);
   const dEval = evaluateBlackjackHand(dealerHand);
-  const { dist, demoNorms } = telemetryAnalytics;
+  const { dist, demoNorms, reproducibilitySummary } = telemetryAnalytics;
+  const remainingSec = Math.max(0, targetDurationSec - elapsedSec);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-5xl mx-auto">
       {/* =====================================================================
-          DEMOGRAPHIC & COGNITIVE RESERVE CALIBRATION BAR
-          Adjusts Expected Baseline (Y_hat) and Z_demo for Age, Education & Card Familiarity
+          PLAYER / FAMILY MEMBER PROFILE & TIME-CAP BAR
+          Quickly switch between yourself and family members, set exact age/education,
+          and pick 2:00 (Fast Test), 3:30 (Clinic Pillar), or 5:00 (Full Shoe).
          ===================================================================== */}
       <div className="rounded-2xl bg-slate-950/90 border border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           <span className="font-extrabold uppercase tracking-wider text-sky-400">
-            🎯 Normative Reference Profile:
+            👤 Player / Tester:
           </span>
 
-          <label className="flex items-center gap-1.5 text-slate-300 font-semibold">
+          <select
+            value={
+              [
+                'Me (Primary Tester)',
+                'Spouse / Partner',
+                'Parent / Older Relative',
+                'Sibling / Adult Child',
+                'Friend / Guest'
+              ].includes(playerLabel)
+                ? playerLabel
+                : 'CUSTOM'
+            }
+            onChange={(e) => {
+              if (e.target.value !== 'CUSTOM') {
+                setPlayerLabel(e.target.value);
+              }
+            }}
+            className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-amber-300 font-bold cursor-pointer"
+          >
+            <option value="Me (Primary Tester)">Me (Primary Tester)</option>
+            <option value="Spouse / Partner">Spouse / Partner</option>
+            <option value="Parent / Older Relative">Parent / Older Relative</option>
+            <option value="Sibling / Adult Child">Sibling / Adult Child</option>
+            <option value="Friend / Guest">Friend / Guest</option>
+            <option value="CUSTOM">Custom Name...</option>
+          </select>
+
+          <input
+            type="text"
+            value={playerLabel}
+            onChange={(e) => setPlayerLabel(e.target.value)}
+            placeholder="Name / Initials"
+            className="w-36 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold"
+          />
+
+          <label className="flex items-center gap-1 text-slate-300 font-semibold">
             Age:
-            <select
+            <input
+              type="number"
+              min={18}
+              max={99}
               value={demoProfile.ageYears}
               onChange={(e) =>
-                setDemoProfile((p) => ({ ...p, ageYears: Number(e.target.value) }))
+                setDemoProfile((p) => ({
+                  ...p,
+                  ageYears: Math.min(99, Math.max(18, Number(e.target.value) || 65))
+                }))
               }
-              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
-            >
-              <option value={58}>58 yrs (Middle-Aged)</option>
-              <option value={65}>65 yrs (Young-Old)</option>
-              <option value={72}>72 yrs (Typical Clinic)</option>
-              <option value={79}>79 yrs (Older Adult)</option>
-              <option value={85}>85 yrs (Octogenarian)</option>
-            </select>
+              className="w-14 px-1.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold text-center"
+            />
           </label>
 
-          <label className="flex items-center gap-1.5 text-slate-300 font-semibold">
-            Education / Reserve:
+          <label className="flex items-center gap-1 text-slate-300 font-semibold">
+            Edu:
             <select
               value={demoProfile.educationYears}
               onChange={(e) =>
@@ -984,17 +1261,17 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               }
               className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
             >
-              <option value={10}>10 yrs (Some High School)</option>
-              <option value={12}>12 yrs (High School / GED)</option>
-              <option value={14}>14 yrs (Associate / Trade)</option>
-              <option value={16}>16 yrs (Bachelor’s Degree)</option>
-              <option value={18}>18 yrs (Master’s Degree)</option>
-              <option value={20}>20 yrs (MD / JD / PhD / Engineer)</option>
+              <option value={10}>10y (Some HS)</option>
+              <option value={12}>12y (High School)</option>
+              <option value={14}>14y (Assoc / Trade)</option>
+              <option value={16}>16y (Bachelor’s)</option>
+              <option value={18}>18y (Master’s)</option>
+              <option value={20}>20y (MD / PhD / JD)</option>
             </select>
           </label>
 
-          <label className="flex items-center gap-1.5 text-slate-300 font-semibold">
-            Card Familiarity:
+          <label className="flex items-center gap-1 text-slate-300 font-semibold">
+            Cards:
             <select
               value={demoProfile.gameFamiliarity}
               onChange={(e) =>
@@ -1005,39 +1282,68 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               }
               className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
             >
-              <option value="LOW">Rarely Plays Cards</option>
-              <option value="MODERATE">Casual Card Player</option>
-              <option value="HIGH">Plays Weekly (Experienced)</option>
+              <option value="LOW">Rarely Plays</option>
+              <option value="MODERATE">Casual Player</option>
+              <option value="HIGH">Avid Player</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-1 text-slate-300 font-semibold">
+            Time Cap:
+            <select
+              value={targetDurationSec}
+              onChange={(e) => setTargetDurationSec(Number(e.target.value))}
+              className="px-2 py-1 rounded-lg bg-emerald-950 border border-emerald-500/60 text-emerald-300 font-extrabold cursor-pointer"
+            >
+              <option value={120}>2:00 (Fast Family/Bug Test)</option>
+              <option value={210}>3:30 (Clinic Pillar Cap)</option>
+              <option value={300}>5:00 (Full 5-Min Shoe)</option>
             </select>
           </label>
         </div>
 
-        <div className="text-[11px] font-bold text-emerald-300">
-          Expected Median RT: {demoNorms.expectedMedianRtMs}ms • Expected 21 Math: {demoNorms.expectedMathAccuracyPct}%
-        </div>
+        <button
+          type="button"
+          onClick={() => setShowTesterLab((v) => !v)}
+          className={`px-3 py-1.5 rounded-lg font-extrabold text-[11px] border cursor-pointer ${
+            showTesterLab
+              ? 'bg-sky-700 border-sky-300 text-white'
+              : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-sky-300'
+          }`}
+        >
+          🔬 {showTesterLab ? 'Hide Tester Lab (Clean Player View)' : `Open Tester Outcome Lab (${savedSessions.length} Saved)`}
+        </button>
       </div>
 
       {/* =====================================================================
-          TOP CASINO RAIL: 5-Minute Shoe Clock, Bankroll & Pause/Clock Controls
+          TOP CASINO RAIL: Shoe Clock with Hard Cap, Bankroll & Pause/Finish Controls
          ===================================================================== */}
       <div className="rounded-2xl bg-slate-950 border-2 border-emerald-500/50 p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg">
         <div className="flex flex-wrap items-center gap-3">
           <span className="px-3.5 py-1.5 rounded-xl bg-emerald-900/90 border border-emerald-400 text-xs font-extrabold uppercase tracking-wider text-white">
             🃏 Blackjack 21 • Hand #{handNumber}
-            {handNumber === 2 || handNumber === 6 || handNumber === 10 ? ' (Anchor Hand)' : ''}
           </span>
           <span className="px-3.5 py-1.5 rounded-xl bg-slate-900 border border-amber-400/60 text-sm font-extrabold text-amber-300">
             💰 Bankroll: ${bankroll} {doublePayoutActive ? '(2x Happy Hour!)' : ''}
           </span>
           {tableStage !== 'PIT_CLOCK_NOON_BONUS' && (
-            <span className="px-3 py-1.5 rounded-xl bg-slate-900 border border-sky-500/40 text-xs font-bold text-sky-300">
-              ⏱️ 5-Min Shoe Timer: {formatMmSs(elapsedSec)} / 5:00
+            <span
+              className={`px-3 py-1.5 rounded-xl bg-slate-900 border text-xs font-bold ${
+                remainingSec <= 20
+                  ? 'border-amber-400 text-amber-300'
+                  : 'border-sky-500/40 text-sky-300'
+              }`}
+            >
+              ⏱️ Shoe Clock: {formatMmSs(elapsedSec)} / {formatMmSs(targetDurationSec)}
+              {elapsedSec >= targetDurationSec && tableStage === 'PLAYER_TURN'
+                ? ' (Final Hand!)'
+                : ''}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {!clockCompletedOnce && tableStage !== 'PIT_CLOCK_NOON_BONUS' && (
+        <div className="flex flex-wrap items-center gap-2">
+          {!clockCompletedOnce && tableStage !== 'PIT_CLOCK_NOON_BONUS' && tableStage !== 'SHOE_COMPLETE_SUMMARY' && (
             <button
               type="button"
               onClick={() => {
@@ -1049,6 +1355,15 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400 text-xs font-extrabold text-amber-300 cursor-pointer"
             >
               🕰️ 2x Noon Clock Bonus
+            </button>
+          )}
+          {handRecords.length > 0 && tableStage !== 'SHOE_COMPLETE_SUMMARY' && (
+            <button
+              type="button"
+              onClick={handleCompleteShoeAndSave}
+              className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-400 text-xs font-extrabold text-white cursor-pointer"
+            >
+              🏁 Finish &amp; See Outcome ({handRecords.length} Hands)
             </button>
           )}
           <button
@@ -1067,7 +1382,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             }}
             className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-bold text-slate-200 cursor-pointer"
           >
-            {isPaused ? '▶ Resume (Censors Pause)' : '⏸ Pause for Distraction'}
+            {isPaused ? '▶ Resume' : '☕ Pause'}
           </button>
         </div>
       </div>
@@ -1512,170 +1827,284 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       )}
 
       {/* =====================================================================
-          ROBUST STATISTICAL TELEMETRY & DEMOGRAPHIC NORMING PANEL
-          Reports Median (Q50) ± SE_med, Leading-Edge Q10, MAD, IQR, Bowley Skewness,
-          Moors' Octile Kurtosis, Ex-Gaussian (Mu, Sigma, Tau), Distraction Censoring,
-          and Age + Education Adjusted Z_demo!
+          STAGE 5: CELEBRATORY SHOE WRAP-UP & IMMEDIATE FAMILY TESTER CONTROLS
          ===================================================================== */}
-      <div className="rounded-2xl bg-slate-950/95 border border-slate-800 p-5 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <div className="text-xs font-extrabold uppercase tracking-wider text-sky-400">
-              📊 Robust Non-Parametric, Ex-Gaussian &amp; Age/Education Normed Telemetry
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Engaged Hands: <strong className="text-white">{dist.validEngagedCount}</strong> • Censored Pauses/Distractions:{' '}
-              <strong className="text-amber-300">{dist.censoredCount}</strong> • Sampling Gate:{' '}
-              <strong className="text-emerald-300">{dist.samplingAdequacy}</strong>
-            </p>
+      {tableStage === 'SHOE_COMPLETE_SUMMARY' && (
+        <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-400 p-6 sm:p-8 text-center space-y-5 shadow-2xl">
+          <div className="inline-block px-4 py-1 rounded-full bg-emerald-500/20 border border-emerald-400 text-xs font-extrabold uppercase tracking-wider text-emerald-300">
+            🎉 Shoe Complete • Auto-Saved to Family Test Log
           </div>
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
+            Great Run, {playerLabel}! Final Bankroll: ${bankroll}
+          </h2>
+          <p className="text-sm sm:text-base text-slate-200 max-w-2xl mx-auto">
+            Played <strong>{telemetryAnalytics.handsPlayed} hands</strong> in{' '}
+            <strong>{formatMmSs(elapsedSec)}</strong> ({dist.validEngagedCount} valid engaged hands,{' '}
+            {dist.censoredCount} distraction-censored). Eagle-Eye 180° Flips:{' '}
+            <strong>
+              {telemetryAnalytics.upsideDownSpotted}/{telemetryAnalytics.upsideDownOpportunities}
+            </strong>{' '}
+            • Discard Snap Matches:{' '}
+            <strong>
+              {discardSnapHits}/{discardSnapOpportunities}
+            </strong>
+            .
+          </p>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap justify-center gap-3 pt-2">
             <button
               type="button"
-              onClick={handleSaveSessionSnapshot}
-              disabled={telemetryAnalytics.handsPlayed === 0}
-              className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 disabled:opacity-40 text-xs font-bold text-white cursor-pointer"
+              onClick={handleResetForNewRun}
+              className="px-6 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm shadow-xl cursor-pointer"
             >
-              💾 Save Session Snapshot
+              🔄 Start Another Run (Same or Next Family Member)
             </button>
             <button
               type="button"
-              onClick={() => {
-                handleSaveSessionSnapshot();
-                onFinishSession();
-              }}
-              className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-xs font-bold text-white cursor-pointer"
+              onClick={onFinishSession}
+              className="px-6 py-3.5 rounded-2xl bg-sky-700 hover:bg-sky-600 text-white font-extrabold text-sm shadow-xl cursor-pointer"
             >
-              View Full Clinical Report &rarr;
+              🩺 Open Full Provider &amp; 3D Brain Report &rarr;
+            </button>
+            <button
+              type="button"
+              onClick={handleExportSessionsCsv}
+              className="px-5 py-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 font-extrabold text-xs cursor-pointer"
+            >
+              📥 Download Family Runs (CSV)
             </button>
           </div>
         </div>
+      )}
 
-        {/* Demographic Normative Verdict Strip */}
-        <div
-          className={`p-3 rounded-xl border text-xs font-bold flex flex-wrap items-center justify-between gap-2 ${
-            demoNorms.highReserveMaskingAlert
-              ? 'bg-amber-950/60 border-amber-400 text-amber-200'
-              : demoNorms.compositeDemoZ <= -1.5
-              ? 'bg-rose-950/60 border-rose-400 text-rose-200'
-              : 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
-          }`}
-        >
-          <span>🩺 {demoNorms.normativeSummaryText}</span>
-          <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-700 text-white">
-            Z_demo = {demoNorms.compositeDemoZ >= 0 ? '+' : ''}
-            {demoNorms.compositeDemoZ} SD ({demoNorms.compositePercentile}th %ile)
-          </span>
-        </div>
-
-        {/* 6 Scientific Distribution & Domain Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center">
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Median RT ± SE</div>
-            <div className="text-base font-extrabold text-white">
-              {dist.medianRtMs > 0 ? `${dist.medianRtMs} ± ${dist.seMedianRtMs}ms` : '—'}
+      {/* =====================================================================
+          TESTER & FAMILY OUTCOME LAB (Hidden During Play for Clean Game Feel,
+          Auto-Opens on Completion or via 1-Click Toggle)
+         ===================================================================== */}
+      {showTesterLab && (
+        <div className="rounded-2xl bg-slate-950/95 border border-slate-800 p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-extrabold uppercase tracking-wider text-sky-400">
+                🔬 Human Pilot &amp; Family Outcome Lab — Signal vs. Noise Diagnostic
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Player: <strong className="text-amber-300">{playerLabel}</strong> • Engaged Hands:{' '}
+                <strong className="text-white">{dist.validEngagedCount}</strong> • Censored Pauses/Distractions:{' '}
+                <strong className="text-amber-300">{dist.censoredCount}</strong> • Sampling Gate:{' '}
+                <strong className="text-emerald-300">{dist.samplingAdequacy}</strong>
+              </p>
             </div>
-            <div className="text-[10px] text-sky-300">
-              Fast Q10: {dist.q10LeadingEdgeMs || '—'}ms (Z={demoNorms.zProcessingSpeedModal})
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSaveSessionSnapshot}
+                disabled={telemetryAnalytics.handsPlayed === 0}
+                className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-600 disabled:opacity-40 text-xs font-bold text-white cursor-pointer"
+              >
+                💾 Save Run Snapshot
+              </button>
+              <button
+                type="button"
+                onClick={handleExportSessionsCsv}
+                disabled={savedSessions.length === 0}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-xs font-bold text-amber-300 cursor-pointer"
+              >
+                📥 Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleExportSessionsJson}
+                disabled={savedSessions.length === 0 && handRecords.length === 0}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 text-xs font-bold text-sky-300 cursor-pointer"
+              >
+                📦 Export JSON
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleSaveSessionSnapshot();
+                  onFinishSession();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-xs font-bold text-white cursor-pointer"
+              >
+                Full Clinical Report &rarr;
+              </button>
             </div>
           </div>
 
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">MAD &amp; IQR Spread</div>
-            <div className="text-base font-extrabold text-emerald-300">
-              MAD: {dist.madRtMs || '—'}ms
+          {/* Within-Person Signal vs. Noise Reproducibility Verdict */}
+          <div
+            className={`p-3 rounded-xl border text-xs font-bold ${
+              !reproducibilitySummary.hasBaseline
+                ? 'bg-slate-900 border-slate-700 text-slate-200'
+                : Math.abs(reproducibilitySummary.srbZ ?? 0) <= 1.65
+                ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-200'
+                : 'bg-amber-950/60 border-amber-400 text-amber-200'
+            }`}
+          >
+            <div className="uppercase text-[10px] tracking-wider text-sky-300 mb-0.5">
+              🔁 Within-Person Reproducibility Check (Is It Real Signal or Random Noise?):
             </div>
-            <div className="text-[10px] text-slate-400">
-              IQR: {dist.iqrRtMs || '—'}ms • CoMAD: {dist.coMadRatio}
+            <div>{reproducibilitySummary.verdictText}</div>
+          </div>
+
+          {/* Demographic Normative Verdict Strip */}
+          <div
+            className={`p-3 rounded-xl border text-xs font-bold flex flex-wrap items-center justify-between gap-2 ${
+              demoNorms.highReserveMaskingAlert
+                ? 'bg-amber-950/60 border-amber-400 text-amber-200'
+                : demoNorms.compositeDemoZ <= -1.5
+                ? 'bg-rose-950/60 border-rose-400 text-rose-200'
+                : 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
+            }`}
+          >
+            <span>🩺 {demoNorms.normativeSummaryText}</span>
+            <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-700 text-white">
+              Z_demo = {demoNorms.compositeDemoZ >= 0 ? '+' : ''}
+              {demoNorms.compositeDemoZ} SD ({demoNorms.compositePercentile}th %ile)
+            </span>
+          </div>
+
+          {/* 6 Scientific Distribution & Domain Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center">
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-bold uppercase text-slate-400">Median RT ± SE</div>
+              <div className="text-base font-extrabold text-white">
+                {dist.medianRtMs > 0 ? `${dist.medianRtMs} ± ${dist.seMedianRtMs}ms` : '—'}
+              </div>
+              <div className="text-[10px] text-sky-300">
+                Motor-Subtracted: {telemetryAnalytics.cognitiveMedianRtMs || '—'}ms (Motor: {telemetryAnalytics.motorBaselineRtMs}ms)
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-bold uppercase text-slate-400">MAD &amp; IQR Spread</div>
+              <div className="text-base font-extrabold text-emerald-300">
+                MAD: {dist.madRtMs || '—'}ms
+              </div>
+              <div className="text-[10px] text-slate-400">
+                IQR: {dist.iqrRtMs || '—'}ms • CoMAD: {dist.coMadRatio}
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-bold uppercase text-slate-400">Skewness &amp; Kurtosis</div>
+              <div className="text-sm font-extrabold text-amber-300">
+                Bowley Skew: {dist.bowleyQuantileSkewness}
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Moors Kurt: {dist.moorsOctileKurtosisExcess} (g1={dist.sampleSkewnessG1 ?? '—'})
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-bold uppercase text-slate-400">Ex-Gaussian (μ / τ)</div>
+              <div className="text-sm font-extrabold text-sky-300">
+                μ={dist.exGaussianMuMs || '—'}ms • τ={dist.exGaussianTauMs || '—'}ms
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Fatigue Slope: {telemetryAnalytics.fatigueSlopeMsPerHand >= 0 ? '+' : ''}
+                {telemetryAnalytics.fatigueSlopeMsPerHand}ms/hand
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-bold uppercase text-slate-400">180° Card &amp; 4-Corner</div>
+              <div className="text-sm font-extrabold text-amber-300">
+                180° Flip: {telemetryAnalytics.upsideDownSpotted}/{telemetryAnalytics.upsideDownOpportunities} ({telemetryAnalytics.upsideDownDetectionRatePct}%)
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Medians: {telemetryAnalytics.qMedians.Q2}/{telemetryAnalytics.qMedians.Q1}/{telemetryAnalytics.qMedians.Q3}/{telemetryAnalytics.qMedians.Q4}ms
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-bold uppercase text-slate-400">Implicit &amp; Peek Memory</div>
+              <div className="text-sm font-extrabold text-emerald-300">
+                Snap: {discardSnapHits}/{discardSnapOpportunities} • Peeks: {discardPeekCount}
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Anchor Savings: {telemetryAnalytics.implicitSavingsMs !== null ? `${telemetryAnalytics.implicitSavingsMs}ms` : 'Pending #6'}
+              </div>
             </div>
           </div>
 
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Skewness &amp; Kurtosis</div>
-            <div className="text-sm font-extrabold text-amber-300">
-              Bowley Skew: {dist.bowleyQuantileSkewness}
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Moors Kurt: {dist.moorsOctileKurtosisExcess} (g1={dist.sampleSkewnessG1 ?? '—'})
-            </div>
+          <div className="text-[11px] text-slate-300 bg-slate-900/70 border border-slate-800 rounded-xl px-3.5 py-2">
+            <strong className="text-sky-300">Distribution Signal vs. Noise Analysis:</strong>{' '}
+            {dist.clinicalDistributionInterpretation}
           </div>
 
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Ex-Gaussian (μ / τ)</div>
-            <div className="text-sm font-extrabold text-sky-300">
-              μ={dist.exGaussianMuMs || '—'}ms • τ={dist.exGaussianTauMs || '—'}ms
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Lapse Ratio τ/μ: {dist.tailToModalRatio} (Z={demoNorms.zAttentionalStabilityTail})
-            </div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">180° Card &amp; 4-Corner</div>
-            <div className="text-sm font-extrabold text-amber-300">
-              180° Flip: {telemetryAnalytics.upsideDownSpotted}/{telemetryAnalytics.upsideDownOpportunities} ({telemetryAnalytics.upsideDownDetectionRatePct}%)
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Medians: {telemetryAnalytics.qMedians.Q2}/{telemetryAnalytics.qMedians.Q1}/{telemetryAnalytics.qMedians.Q3}/{telemetryAnalytics.qMedians.Q4}ms
-            </div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Implicit &amp; Peek Memory</div>
-            <div className="text-sm font-extrabold text-emerald-300">
-              Snap: {discardSnapHits}/{discardSnapOpportunities} • Peeks: {discardPeekCount}
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Anchor Savings: {telemetryAnalytics.implicitSavingsMs !== null ? `${telemetryAnalytics.implicitSavingsMs}ms` : 'Pending #6'}
-            </div>
-          </div>
-        </div>
-
-        <div className="text-[11px] text-slate-300 bg-slate-900/70 border border-slate-800 rounded-xl px-3.5 py-2">
-          <strong className="text-sky-300">Distribution Signal vs. Noise Analysis:</strong>{' '}
-          {dist.clinicalDistributionInterpretation}
-        </div>
-
-        {/* Saved Repeated Sessions Comparison Table */}
-        {savedSessions.length > 0 && (
-          <div className="pt-2 border-t border-slate-800/80 space-y-2">
-            <div className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
-              📈 Repeated Usage / Saved Session History ({savedSessions.length} Runs)
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-slate-300">
-                <thead>
-                  <tr className="border-b border-slate-800 text-[10px] uppercase text-slate-400">
-                    <th className="py-1 pr-2">Run</th>
-                    <th className="py-1 pr-2">Age/Edu</th>
-                    <th className="py-1 pr-2">Engaged (Censored)</th>
-                    <th className="py-1 pr-2">Median ± SE</th>
-                    <th className="py-1 pr-2">Skew / Kurt</th>
-                    <th className="py-1 pr-2">Ex-Gauss τ</th>
-                    <th className="py-1">Z_demo (%ile)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {savedSessions.map((s) => (
-                    <tr key={s.sessionId} className="border-b border-slate-900">
-                      <td className="py-1 pr-2 font-bold text-white">{s.timestampIso}</td>
-                      <td className="py-1 pr-2">{s.ageYears}y / {s.educationYears}y</td>
-                      <td className="py-1 pr-2">{s.validEngagedHands} ({s.censoredDistractionHands} excl)</td>
-                      <td className="py-1 pr-2">{s.medianDecisionRtMs} ± {s.seMedianRtMs}ms</td>
-                      <td className="py-1 pr-2">{s.bowleySkewness} / {s.moorsKurtosisExcess}</td>
-                      <td className="py-1 pr-2 text-sky-300">{s.exGaussianTauMs}ms</td>
-                      <td className="py-1 font-extrabold text-amber-300">
-                        {s.compositeDemoZ >= 0 ? '+' : ''}{s.compositeDemoZ} SD ({s.compositePercentile}%)
-                      </td>
+          {/* Saved Repeated Sessions Comparison Table */}
+          {savedSessions.length > 0 && (
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  📈 Family &amp; Self-Tester Comparison Log ({savedSessions.length} Saved Runs)
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSavedSessions([]);
+                    try {
+                      window.localStorage.removeItem(STORAGE_KEY);
+                    } catch {
+                      // Ignore
+                    }
+                  }}
+                  className="text-[11px] text-rose-400 hover:text-rose-300 font-bold cursor-pointer"
+                >
+                  🗑️ Clear Log
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-300">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-[10px] uppercase text-slate-400">
+                      <th className="py-1 pr-2">Player</th>
+                      <th className="py-1 pr-2">Time</th>
+                      <th className="py-1 pr-2">Age/Edu</th>
+                      <th className="py-1 pr-2">Hands (Excl)</th>
+                      <th className="py-1 pr-2">Median ± SE (Cog)</th>
+                      <th className="py-1 pr-2">Skew / Kurt</th>
+                      <th className="py-1 pr-2">Ex-Gauss τ</th>
+                      <th className="py-1 pr-2">21 Math / 180°</th>
+                      <th className="py-1">Z_demo (%ile)</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {savedSessions.map((s) => (
+                      <tr key={s.sessionId} className="border-b border-slate-900">
+                        <td className="py-1 pr-2 font-extrabold text-amber-300">
+                          {s.playerLabel || 'Tester'}
+                        </td>
+                        <td className="py-1 pr-2 text-slate-400">{s.timestampIso}</td>
+                        <td className="py-1 pr-2">{s.ageYears}y / {s.educationYears}y</td>
+                        <td className="py-1 pr-2">
+                          {s.validEngagedHands} ({s.censoredDistractionHands} excl)
+                        </td>
+                        <td className="py-1 pr-2 font-bold text-white">
+                          {s.medianDecisionRtMs} ± {s.seMedianRtMs}ms ({s.cognitiveMedianRtMs ?? s.medianDecisionRtMs}ms)
+                        </td>
+                        <td className="py-1 pr-2">{s.bowleySkewness} / {s.moorsKurtosisExcess}</td>
+                        <td className="py-1 pr-2 text-sky-300">{s.exGaussianTauMs}ms</td>
+                        <td className="py-1 pr-2">
+                          {s.mathOptimalRate}% / {s.upsideDownDetectionRate}%
+                        </td>
+                        <td className="py-1 font-extrabold text-emerald-300">
+                          {s.compositeDemoZ >= 0 ? '+' : ''}
+                          {s.compositeDemoZ} SD ({s.compositePercentile}%)
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
