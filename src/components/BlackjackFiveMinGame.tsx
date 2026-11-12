@@ -32,6 +32,7 @@ export interface HandRecord {
   isAnchorHand: boolean;
   anchorPassNumber: 1 | 2 | 3 | null;
   decisionRtMs: number;
+  playerCardCount?: number;
   playerFinalTotal: number;
   dealerFinalTotal: number;
   outcome: 'WIN' | 'LOSS' | 'PUSH' | 'BLACKJACK';
@@ -141,22 +142,21 @@ export function evaluateBlackjackHand(cards: BlackjackCard[]): {
 export function isActionMathematicallySound(
   playerCards: BlackjackCard[],
   dealerUpCard: BlackjackCard,
-  action: 'HIT' | 'STAND' | 'DOUBLE'
+  action: 'HIT' | 'STAND' | 'DOUBLE',
+  familiarity: 'LOW' | 'MODERATE' | 'HIGH' = 'MODERATE'
 ): boolean {
   const { total, isSoft } = evaluateBlackjackHand(playerCards);
   const dealerVal = dealerUpCard.value;
 
-  // Never hit on hard 18+
-  if (!isSoft && total >= 18 && action === 'HIT') return false;
-  // Never stand on hard 11 or less (or soft 15 or less)
+  // Unambiguous numerical/executive errors across ALL familiarity levels:
+  // 1. Never hit or double on hard 17+
+  if (!isSoft && total >= 17 && (action === 'HIT' || action === 'DOUBLE')) return false;
+  // 2. Never stand on 11 or less (busting is mathematically impossible: 11 + 10 = 21)
   if (total <= 11 && action === 'STAND') return false;
-  if (isSoft && total <= 15 && action === 'STAND') return false;
-  // Against dealer 7..11, standing on hard 12..14 is clearly suboptimal
-  if (!isSoft && total >= 12 && total <= 14 && dealerVal >= 7 && action === 'STAND') {
-    return false;
-  }
-  // Against dealer 2..6 (bust cards), hitting on hard 17+ is suboptimal
-  if (!isSoft && total >= 17 && dealerVal <= 6 && action === 'HIT') {
+  // 3. Never stand on soft 12..14 (zero bust risk and far below 17)
+  if (isSoft && total <= 14 && action === 'STAND') return false;
+  // 4. Only grade Vegas dealer-upcard risk thresholds on experienced/avid players so cautious novices aren't penalized
+  if (familiarity === 'HIGH' && !isSoft && total >= 12 && total <= 13 && dealerVal >= 8 && action === 'STAND') {
     return false;
   }
   return true;
@@ -215,9 +215,40 @@ export const AuthenticBlackjackCardView: React.FC<{
       : 'w-24 h-34 p-2 rounded-xl';
 
   const renderCenterPips = () => {
+    if (card.rank === 'A') {
+      // Giant Power-Ace center pip with unmistakable upright stem/crown so 180° inversion is instantly visible
+      return (
+        <svg viewBox="0 0 60 76" className="w-12 h-15">
+          <text x="30" y="45" fontSize="34" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="30" y="68" fontSize="8" fontWeight="bold" fill="#64748B" textAnchor="middle">ACE</text>
+        </svg>
+      );
+    }
+    if (card.rank === '3') {
+      // Asymmetric 3-pip triangle (2 upper pips + 1 lower-center pip) so 180° flips the triangle upside down
+      return (
+        <svg viewBox="0 0 60 76" className="w-12 h-15">
+          <text x="18" y="24" fontSize="16" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="42" y="24" fontSize="16" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="30" y="58" fontSize="17" fill={pipFill} textAnchor="middle">{card.suit}</text>
+        </svg>
+      );
+    }
+    if (card.rank === '5') {
+      // Asymmetric 5-pip crown (3 upper pips + 2 lower pips) so 180° inversion is immediately recognizable
+      return (
+        <svg viewBox="0 0 60 76" className="w-12 h-15">
+          <text x="15" y="22" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="30" y="28" fontSize="15" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="45" y="22" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="18" y="60" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="42" y="60" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
+        </svg>
+      );
+    }
     if (card.rank === '7') {
       // Authentic 7 of Hearts / Spades: 2 columns of 3 + 1 extra pip in the TOP center!
-      // When rotated 180°, that 7th center pip is at the BOTTOM instead of the TOP!
+      // When rotated 180°, that 7th center pip sits at the BOTTOM instead of the TOP!
       return (
         <svg viewBox="0 0 60 76" className="w-12 h-15">
           <text x="15" y="18" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
@@ -230,14 +261,19 @@ export const AuthenticBlackjackCardView: React.FC<{
         </svg>
       );
     }
-    if (card.rank === '5' || card.rank === '3' || card.rank === '9') {
+    if (card.rank === '9') {
+      // Authentic 9-pip layout: 2 columns of 4 + 1 extra pip in the UPPER-center (flips to lower-center at 180°!)
       return (
         <svg viewBox="0 0 60 76" className="w-12 h-15">
-          <text x="16" y="20" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
-          <text x="44" y="20" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
-          <text x="30" y="39" fontSize="16" fill={pipFill} textAnchor="middle">{card.suit}</text>
-          <text x="16" y="60" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
-          <text x="44" y="60" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="15" y="15" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="15" y="32" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="15" y="49" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="15" y="66" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="45" y="15" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="45" y="32" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="45" y="49" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="45" y="66" fontSize="12" fill={pipFill} textAnchor="middle">{card.suit}</text>
+          <text x="30" y="24" fontSize="14" fill={pipFill} textAnchor="middle">{card.suit}</text>
         </svg>
       );
     }
@@ -286,6 +322,7 @@ export const AuthenticBlackjackCardView: React.FC<{
 
 interface BlackjackFiveMinGameProps {
   presentationMode: SingleTrialMode;
+  externalPaused?: boolean;
   onAppendTrialEvent: (
     ev: Omit<TrialEvent, 'eventId' | 'trialIndex' | 'technicalFrameDrop'>
   ) => void;
@@ -297,6 +334,7 @@ const STORAGE_KEY = 'postcircecd_blackjack_sessions_v2';
 
 export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   presentationMode,
+  externalPaused = false,
   onAppendTrialEvent,
   onUpdateStationTelemetry,
   onFinishSession
@@ -308,11 +346,13 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     educationYears: 16, // 12=High School, 14=Some College/Trade, 16=Bachelor's, 18=Master's, 20=MD/JD/PhD
     gameFamiliarity: 'MODERATE'
   });
+  const [setupBarExpanded, setSetupBarExpanded] = useState<boolean>(true);
 
   // Strict Wall-Clock Appointment Time Cap (120s Fast Test, 210s Clinic Pillar, 300s 5-Min Shoe)
   const [targetDurationSec, setTargetDurationSec] = useState<number>(300);
   const [elapsedSec, setElapsedSec] = useState<number>(0);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+  const effectivePaused = isPaused || externalPaused;
   const [showTesterLab, setShowTesterLab] = useState<boolean>(false);
   const autoSavedCurrentShoeRef = useRef<boolean>(false);
 
@@ -320,6 +360,20 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [hadInterruptionThisHand, setHadInterruptionThisHand] = useState<boolean>(false);
   const [isPostPauseWarmupHand, setIsPostPauseWarmupHand] = useState<boolean>(false);
   const lastPointerActivityRef = useRef<number>(performance.now());
+  const prevExternalPausedRef = useRef<boolean>(externalPaused);
+
+  useEffect(() => {
+    if (externalPaused && !prevExternalPausedRef.current) {
+      setHadInterruptionThisHand(true);
+    } else if (!externalPaused && prevExternalPausedRef.current) {
+      setIsPostPauseWarmupHand(true);
+      const now = performance.now();
+      handOnsetRef.current = now;
+      lastPreDecisionActionRef.current = now;
+      cornerOnsetRef.current = now;
+    }
+    prevExternalPausedRef.current = externalPaused;
+  }, [externalPaused]);
 
   // Shoe & Bankroll State
   const [shoe, setShoe] = useState<BlackjackCard[]>(() => buildShuffledShoe(1));
@@ -342,7 +396,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [dealerHand, setDealerHand] = useState<BlackjackCard[]>([]);
   const [dealerHoleRevealed, setDealerHoleRevealed] = useState<boolean>(false);
   const [handBanner, setHandBanner] = useState<string>(
-    'Welcome to the 5-Minute Blackjack 21 Table! Tap the Glowing Corner Chip to Deal Hand #1.'
+    'Welcome to the 21 Club Blackjack Table! Tap the Glowing Corner Chip to Deal Hand #1.'
   );
 
   // Silent Surrogate 1: Upside-down card tracking on the current hand
@@ -351,11 +405,16 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [currentHandFlipRtMs, setCurrentHandFlipRtMs] = useState<number | null>(null);
   const [falseFlipTaps, setFalseFlipTaps] = useState<number>(0);
 
-  // Silent Surrogate 2: 4-Corner Chip Bet Quadrant RT
+  // Silent Surrogate 2: 4-Corner Chip Bet Quadrant RT & Off-Target Tap Guard
   const [activeBetCorner, setActiveBetCorner] = useState<'Q1' | 'Q2' | 'Q3' | 'Q4'>('Q3');
   const [lastBetCornerRtMs, setLastBetCornerRtMs] = useState<number>(520);
+  const [wrongCornerTapCount, setWrongCornerTapCount] = useState<number>(0);
+  const [cornerHintMessage, setCornerHintMessage] = useState<string>('');
   const cornerOnsetRef = useRef<number>(performance.now());
   const handOnsetRef = useRef<number>(performance.now());
+  // Tracks the clean onset before the player's FIRST 21 decision (resets after bonus taps so claiming bonuses never penalizes RT!)
+  const lastPreDecisionActionRef = useRef<number>(performance.now());
+  const first21DecisionRtRef = useRef<number | null>(null);
 
   // Silent Surrogate 3: Table Side-Bonus Rule (Alternates between SUIT_MATCH & SEVEN_LUCK)
   const [sideRuleMode, setSideRuleMode] = useState<'SUIT_MATCH' | 'SEVEN_LUCK'>('SUIT_MATCH');
@@ -363,10 +422,6 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [prevSideRuleMode, setPrevSideRuleMode] = useState<'SUIT_MATCH' | 'SEVEN_LUCK'>('SUIT_MATCH');
 
   // Silent Surrogate 4 (ZERO POPUPS!): Live On-Felt Discard Tray "Snap Match" & "Peek Discard"
-  // Instead of interrupting play with a memory quiz screen, the Discard Tray sits on the felt:
-  // If any card in the current hand matches the rank of the previous hand's top discard, the player
-  // can tap "🔔 Snap Discard Match (+$50)"! And if they forget what was discarded, they can tap
-  // "👁️ Peek Discard" (a natural assistive feature whose usage is quietly logged!).
   const [lastDiscardTopCard, setLastDiscardTopCard] = useState<BlackjackCard | null>(null);
   const [discardPeekOpen, setDiscardPeekOpen] = useState<boolean>(false);
   const [discardPeekCount, setDiscardPeekCount] = useState<number>(0);
@@ -374,14 +429,20 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [discardSnapOpportunities, setDiscardSnapOpportunities] = useState<number>(0);
   const [discardSnapClaimedThisHand, setDiscardSnapClaimedThisHand] = useState<boolean>(false);
 
-  // Silent Surrogate 5: Mid-Shoe Pit Boss Clock Bonus (Blank Clock at Noon, NO progress bar!)
-  const HOURS_ORDER = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  // Silent Surrogate 5: Brisk 5-Tap Pit Boss Clock Bonus (4 Cardinal Anchors 12, 3, 6, 9 + Noon Hands, NO progress bar!)
+  const CLOCK_ANCHOR_HOURS = [
+    { hour: 12, expectedDeg: 0 },
+    { hour: 3, expectedDeg: 90 },
+    { hour: 6, expectedDeg: 180 },
+    { hour: 9, expectedDeg: 270 }
+  ] as const;
   const [clockCompletedOnce, setClockCompletedOnce] = useState<boolean>(false);
-  const [clockPlacedHours, setClockPlacedHours] = useState<{ hour: number; x: number; y: number; deg: number }[]>([]);
+  const [clockPlacedHours, setClockPlacedHours] = useState<{ hour: number; x: number; y: number; deg: number; errDeg: number }[]>([]);
   const [clockNoonHandDeg, setClockNoonHandDeg] = useState<number | null>(null);
   const [clockStartMs, setClockStartMs] = useState<number>(performance.now());
   const [clockDurationSec, setClockDurationSec] = useState<number | null>(null);
   const [clockNoonErrorDeg, setClockNoonErrorDeg] = useState<number | null>(null);
+  const [clockAnchorMeanErrDeg, setClockAnchorMeanErrDeg] = useState<number | null>(null);
 
   // Collected Hand-by-Hand Telemetry Records + Persisted Multi-Session History
   const [handRecords, setHandRecords] = useState<HandRecord[]>([]);
@@ -420,12 +481,12 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   // Strict Wall-Clock Shoe Timer (Stops on WARMUP_INTRO, Pause, or SHOE_COMPLETE_SUMMARY)
   useEffect(() => {
-    if (tableStage === 'WARMUP_INTRO' || tableStage === 'SHOE_COMPLETE_SUMMARY' || isPaused) return;
+    if (tableStage === 'WARMUP_INTRO' || tableStage === 'SHOE_COMPLETE_SUMMARY' || effectivePaused) return;
     const id = window.setInterval(() => {
       setElapsedSec((s) => s + 1);
     }, 1000);
     return () => window.clearInterval(id);
-  }, [tableStage, isPaused]);
+  }, [tableStage, effectivePaused]);
 
   const formatMmSs = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -435,7 +496,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   // Compute Robust RT Distribution Moments (Median, Q10, MAD, IQR, Bowley Skewness, Moors Kurtosis, Ex-Gaussian Mu/Sigma/Tau),
   // Invisible Motor Baseline Subtraction (RT_motor from natural deal taps), Within-Window Fatigue Slope,
-  // and Age + Education Normative Z-scores!
+  // Split-Half Internal Consistency, and Age + Education Normative Z-scores!
   const telemetryAnalytics = useMemo(() => {
     const rawSamples: RawRtSampleInput[] = handRecords.map((h) => ({
       trialNumber: h.handNumber,
@@ -487,17 +548,26 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       fatigueSlopeMsPerHand = den > 0 ? Math.round(num / den) : 0;
     }
 
-    // 4-Corner Bet Quadrant MEDIANS (never means!)
-    const byQ: Record<'Q1' | 'Q2' | 'Q3' | 'Q4', number[]> = { Q1: [], Q2: [], Q3: [], Q4: [] };
-    for (const h of engagedHands) {
-      byQ[h.betQuadrant].push(h.betPlacementRtMs);
-    }
     const med = (arr: number[]) => {
       if (arr.length === 0) return 0;
       const s = [...arr].sort((a, b) => a - b);
       const mid = Math.floor(s.length / 2);
       return Math.round(s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2);
     };
+
+    // Split-Half Odd vs. Even Hand Reliability Check (Objective single-run signal vs. noise check!)
+    const oddRts = engagedHands.filter((_, i) => i % 2 === 0).map((h) => h.decisionRtMs);
+    const evenRts = engagedHands.filter((_, i) => i % 2 === 1).map((h) => h.decisionRtMs);
+    const oddMedMs = med(oddRts);
+    const evenMedMs = med(evenRts);
+    const splitHalfDiffMs =
+      oddRts.length >= 2 && evenRts.length >= 2 ? Math.abs(oddMedMs - evenMedMs) : null;
+
+    // 4-Corner Bet Quadrant MEDIANS (never means!)
+    const byQ: Record<'Q1' | 'Q2' | 'Q3' | 'Q4', number[]> = { Q1: [], Q2: [], Q3: [], Q4: [] };
+    for (const h of engagedHands) {
+      byQ[h.betQuadrant].push(h.betPlacementRtMs);
+    }
 
     // Implicit Memory Savings across Fixed Anchor Hands (Hand #2 vs Hand #6)
     const anchor1 = handRecords.find((h) => h.anchorPassNumber === 1 && !h.isPausedOrBlurred);
@@ -549,12 +619,27 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       };
     }
 
+    // Outcome Data Usefulness Scorecard (Tells tester honestly whether this run's data is clinic-grade vs under-sampled)
+    const sampleGrade =
+      dist.validEngagedCount >= 10
+        ? 'HIGH (≥10 valid hands — Clinic-Grade)'
+        : dist.validEngagedCount >= 6
+        ? 'MODERATE (6–9 hands — Good Pilot Screen)'
+        : 'LOW (<6 hands — Play ≥2:00 for stable quantiles)';
+    const splitHalfConsistent =
+      splitHalfDiffMs !== null ? splitHalfDiffMs <= Math.max(320, dist.iqrRtMs * 0.85) : null;
+
     return {
       dist,
       handsPlayed: n,
       motorBaselineRtMs,
       cognitiveMedianRtMs,
       fatigueSlopeMsPerHand,
+      oddMedMs,
+      evenMedMs,
+      splitHalfDiffMs,
+      splitHalfConsistent,
+      sampleGrade,
       mathOptimalRatePct: mathRatePct,
       upsideDownOpportunities: udOpps,
       upsideDownSpotted: udSpotted,
@@ -571,39 +656,43 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     };
   }, [handRecords, demoProfile, savedSessions, playerLabel]);
 
-  // Synchronize live Blackjack telemetry into the main PostCircECD StationTelemetryMap
+  // Synchronize authentic, UNPADDED Blackjack telemetry into the main PostCircECD StationTelemetryMap
   const syncAllTelemetryToApp = (
     records: HandRecord[],
     snapHits: number,
     snapOpps: number,
     peekCnt: number,
     clkSec: number | null,
-    clkErrDeg: number | null
+    clkErrDeg: number | null,
+    clkAnchorErrDeg: number | null
   ) => {
     if (records.length === 0) return;
 
     const engaged = records.filter((r) => !r.isPausedOrBlurred && !r.postPauseWarmup);
     if (engaged.length === 0) return;
 
+    // Genuine unpadded quadrant trials (no 4x artificial sample inflation!)
     const qTrials = engaged.map((r) => ({
       quadrant: r.betQuadrant,
       rtMs: r.betPlacementRtMs,
       euclideanDistancePx: 140,
-      trajectoryLengthPx: 148
+      trajectoryLengthPx: wrongCornerTapCount > 0 ? 168 : 144
     }));
-    const paddedQ = [...qTrials, ...qTrials, ...qTrials, ...qTrials];
-    const s03 = computeQuadrantKruskalWallis(paddedQ, Math.max(30, elapsedSec));
+    const s03 = computeQuadrantKruskalWallis(qTrials, Math.max(15, elapsedSec));
 
-    const navonTrials = engaged.map((r) => ({
-      level: (r.upsideDownPresent ? 'local' : 'global') as 'global' | 'local',
-      crowded: r.upsideDownPresent,
-      rtMs: r.upsideDownFlipRtMs ?? r.decisionRtMs,
-      isCorrect: r.upsideDownPresent ? r.upsideDownSpotted : r.mathOptimalDecision
-    }));
-    const s11 = computeNavonGlobalLocalMetrics(
-      [...navonTrials, ...navonTrials, ...navonTrials],
-      Math.max(45, elapsedSec)
-    );
+    // Commensurate RT & accuracy scale across clean upright 2-card hands ('local'/uncrowded)
+    // vs. rotated 180° or 3+ card ensemble hands ('global'/crowded) — prevents fast bonus-flip RTs
+    // from inverting GLDI = rcsGlobal / rcsLocal into a false-positive PCA flag!
+    const navonTrials = engaged.map((r) => {
+      const isCrowdedOrRotated = r.upsideDownPresent || (r.playerCardCount ?? 2) >= 3;
+      return {
+        level: (isCrowdedOrRotated ? 'global' : 'local') as 'global' | 'local',
+        crowded: isCrowdedOrRotated,
+        rtMs: r.decisionRtMs,
+        isCorrect: r.mathOptimalDecision
+      };
+    });
+    const s11 = computeNavonGlobalLocalMetrics(navonTrials, Math.max(15, elapsedSec));
 
     const switchTrials = engaged.map((r) => ({
       condition: r.sideRuleCondition,
@@ -612,14 +701,23 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       technicalFrameDrop: false,
       modeSwitchInterrupted: false
     }));
-    const s31 = computeWithinConditionSwitchMetrics(
-      [...switchTrials, ...switchTrials, ...switchTrials],
-      400,
-      20261109
-    );
+    const s31 = computeWithinConditionSwitchMetrics(switchTrials, 400, 20261109);
 
-    const freeSuccess = snapOpps > 0 ? Math.min(12, Math.max(4, Math.round((snapHits / snapOpps) * 12))) : 10;
-    const cuedSuccess = Math.min(12, Math.max(freeSuccess, freeSuccess + Math.min(4, peekCnt)));
+    // Convergent incidental memory mapping: never penalize players who didn't need to click 'Peek Discard'!
+    // Only score low cued rescue if the player repeatedly peeked (>=2), still missed all Snap Matches,
+    // AND failed or slowed >600ms on repeated Fixed Anchor Hand #6.
+    const anc1 = engaged.find((r) => r.anchorPassNumber === 1);
+    const anc2 = engaged.find((r) => r.anchorPassNumber === 2);
+    const anchorFailed =
+      Boolean(anc2 && (!anc2.mathOptimalDecision || (anc1 && anc2.decisionRtMs - anc1.decisionRtMs > 600)));
+    const freeSuccess =
+      snapOpps === 0
+        ? 9
+        : snapHits / snapOpps >= 0.5
+        ? Math.min(12, Math.max(9, Math.round((snapHits / snapOpps) * 12)))
+        : Math.max(0, Math.round((snapHits / snapOpps) * 8));
+    const failedDespiteCues = snapOpps >= 2 && snapHits === 0 && peekCnt >= 2 && anchorFailed;
+    const cuedSuccess = failedDespiteCues ? 5 : Math.max(11, freeSuccess);
     const s5Metrics = computeSequenceAndAssociativeScores({
       placedOrder: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       sLetterFree: freeSuccess,
@@ -629,7 +727,16 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
     const udTotal = engaged.filter((x) => x.upsideDownPresent).length;
     const udHits = engaged.filter((x) => x.upsideDownPresent && x.upsideDownSpotted).length;
-    const clockHandsScore = clkErrDeg !== null && clkErrDeg <= 25 ? 4 : 3;
+    const anchorSpatialVertices =
+      clkAnchorErrDeg === null
+        ? 7
+        : clkAnchorErrDeg <= 22
+        ? 8
+        : clkAnchorErrDeg <= 40
+        ? 6
+        : 4;
+    const clockHandsScore =
+      clkErrDeg === null ? 3 : clkErrDeg <= 20 ? 4 : clkErrDeg <= 40 ? 3 : 1;
 
     onUpdateStationTelemetry({
       'S0.3': s03,
@@ -638,36 +745,46 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
         arraysCompleted90s: engaged.length,
         maxComplexityReached: Math.min(10, 4 + Math.floor(engaged.length / 2)),
         accuracyRate: Number((engaged.filter((x) => x.mathOptimalDecision).length / engaged.length).toFixed(2)),
-        measuredDurationSec: Math.max(45, elapsedSec)
+        measuredDurationSec: Math.max(15, elapsedSec)
       },
       'S2.1': {
-        totalNoisePlates: Math.max(6, udTotal),
+        totalNoisePlates: Math.max(1, udTotal),
         pareidoliaFalsePositiveCount: falseFlipTaps,
-        trueObjectHitCount: Math.max(4, udHits),
-        measuredDurationSec: Math.max(30, elapsedSec)
+        trueObjectHitCount: udHits,
+        measuredDurationSec: Math.max(15, elapsedSec)
       },
       'S3.1': s31,
       'S3.2': {
-        cubeVerticesCorrect: 8,
+        cubeVerticesCorrect: anchorSpatialVertices,
         clockNumbersAndHandsCorrect: clockHandsScore,
-        constructionCompositeScore: 8 + clockHandsScore,
-        measuredDurationSec: clkSec ?? 24.0
+        constructionCompositeScore: anchorSpatialVertices + clockHandsScore,
+        measuredDurationSec: clkSec ?? 22.0
       },
       'S5.1': {
         ...s5Metrics,
-        famousStep1FreeNamingCorrect: Math.min(8, Math.max(4, freeSuccess - 2)),
+        // Keep Famous Faces neutral unless standalone Wing V Famous Faces station is explicitly run
+        famousStep1FreeNamingCorrect: 7,
         famousStep2aVisualSemanticCorrect: 8,
         famousStep2bVerbalClueCorrect: 8,
         famousStep3PhonemicCuedCorrect: 8,
-        measuredDurationSec: Math.max(45, elapsedSec)
+        measuredDurationSec: Math.max(15, elapsedSec)
       }
     });
   };
 
-  // Deal a new Blackjack hand when the player taps the active Corner Chip Stack
+  // Deal a new Blackjack hand ONLY when the player taps the illuminated activeBetCorner!
   // Includes the 3-Encounter Fixed Anchor Loop (Hand #2 -> Hand #6 -> Hand #10)
-  // where ONE variable changes at a time!
+  // and ensures >=2 natural Discard Snap Match probes per 8-hand run!
   const handleDealFromCornerChip = (corner: 'Q1' | 'Q2' | 'Q3' | 'Q4', chipAmount: number) => {
+    if (corner !== activeBetCorner) {
+      setWrongCornerTapCount((c) => c + 1);
+      setCornerHintMessage(
+        `Tap the glowing gold chip stack in Corner ${activeBetCorner} to deal Hand #${handNumber}!`
+      );
+      return;
+    }
+
+    setCornerHintMessage('');
     const betRt = Math.max(150, Math.round(performance.now() - cornerOnsetRef.current));
     setLastBetCornerRtMs(betRt);
     setCurrentBet(chipAmount);
@@ -714,18 +831,49 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       p2 = { ...currentShoe.pop()! };
       d2 = { ...currentShoe.pop()! };
 
+      // Guarantee natural Discard Snap Match opportunity on Hand #4 and Hand #8 if sparse so 2:00 runs never have 0/0!
+      if (
+        lastDiscardTopCard &&
+        (handNumber === 4 || handNumber === 8) &&
+        p1.rank !== lastDiscardTopCard.rank &&
+        p2.rank !== lastDiscardTopCard.rank &&
+        d1.rank !== lastDiscardTopCard.rank
+      ) {
+        const altSuit = lastDiscardTopCard.suit === '♠' ? SUITS[1] : SUITS[0];
+        d1 = {
+          id: `snap-seed-${handNumber}-${Date.now()}`,
+          rank: lastDiscardTopCard.rank,
+          suit: altSuit.suit,
+          suitName: altSuit.name,
+          value: lastDiscardTopCard.value,
+          isUpsideDown: false
+        };
+      }
+
+      // Strict 50/50 experimental balance: Hands #1, #2, #5, #7, #9, #10 are clean upright (0°);
+      // Hands #3, #4, #6, #8, #11, #13... have 1 asymmetric card rotated 180° (3 vs 3 in a 6-hand 2:00 run!)
       shouldHaveUpsideDown =
-        handNumber % 2 === 0 ||
-        ASYMMETRIC_RANKS.includes(p1.rank) ||
-        ASYMMETRIC_RANKS.includes(p2.rank);
+        handNumber === 3 ||
+        (handNumber >= 4 && handNumber <= 9 && handNumber % 2 === 0) ||
+        (handNumber > 10 && handNumber % 2 === 1);
 
       if (shouldHaveUpsideDown) {
         if (ASYMMETRIC_RANKS.includes(p2.rank)) {
           p2.isUpsideDown = true;
         } else if (ASYMMETRIC_RANKS.includes(p1.rank)) {
           p1.isUpsideDown = true;
-        } else {
+        } else if (ASYMMETRIC_RANKS.includes(d1.rank)) {
           d1.isUpsideDown = true;
+        } else {
+          // Ensure upside-down probe uses a genuinely asymmetric pip rank (7, 5, 3, 9, or A) so it is never ambiguous!
+          p2 = {
+            id: `asym-${handNumber}-${Date.now()}`,
+            rank: '7',
+            suit: '♦',
+            suitName: 'Diamonds',
+            value: 7,
+            isUpsideDown: true
+          };
         }
       }
     }
@@ -752,22 +900,35 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     setCurrentHandSpottedUpsideDown(false);
     setCurrentHandFlipRtMs(null);
     setHadInterruptionThisHand(false);
-    lastPointerActivityRef.current = performance.now();
+
+    const now = performance.now();
+    lastPointerActivityRef.current = now;
+    handOnsetRef.current = now;
+    lastPreDecisionActionRef.current = now;
+    first21DecisionRtRef.current = null;
+
     setTableStage('PLAYER_TURN');
-    handOnsetRef.current = performance.now();
-    setHandBanner(`Hand #${handNumber} Dealt ($${chipAmount} Bet) — Hit, Stand, or Double Down!`);
+    const openingEval = evaluateBlackjackHand([p1, p2]);
+    if (openingEval.isBlackjack) {
+      setHandBanner(
+        `🎉 Natural 21 Dealt! (Check for any upside-down card or Snap Match first, then tap Claim Blackjack 21!)`
+      );
+    } else {
+      setHandBanner(`Hand #${handNumber} Dealt ($${chipAmount} Bet) — Hit, Stand, or Double Down!`);
+    }
   };
 
   // Player taps a card on the felt to flip an upside-down card upright
   const handleTapCardToFlip = (owner: 'PLAYER' | 'DEALER', idx: number) => {
     if (tableStage !== 'PLAYER_TURN') return;
-    lastPointerActivityRef.current = performance.now();
+    const now = performance.now();
+    lastPointerActivityRef.current = now;
     const list = owner === 'PLAYER' ? [...playerHand] : [...dealerHand];
     const target = list[idx];
     if (!target) return;
 
     if (target.isUpsideDown) {
-      const rt = Math.max(160, Math.round(performance.now() - handOnsetRef.current));
+      const rt = Math.max(160, Math.round(now - handOnsetRef.current));
       target.isUpsideDown = false;
       target.wasFlippedByPlayer = true;
       if (owner === 'PLAYER') setPlayerHand(list);
@@ -776,6 +937,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       setCurrentHandSpottedUpsideDown(true);
       setCurrentHandFlipRtMs(rt);
       setBankroll((b) => b + 50);
+      // Reset pre-decision clock right after bonus flip so spotting bonuses NEVER inflates 21 decision RT!
+      lastPreDecisionActionRef.current = now;
       setHandBanner('🦅 Eagle-Eye Bonus! You flipped the upside-down card upright (+$50 Chips)!');
     } else {
       setFalseFlipTaps((f) => f + 1);
@@ -804,13 +967,17 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     betWager: number
   ) => {
     const now = performance.now();
-    const decisionRt = Math.max(180, Math.round(now - handOnsetRef.current));
+    // Pure First-21-Decision RT (captured on first Hit/Stand/Double, uncontaminated by bonus clicks or multi-hits!)
+    const decisionRt =
+      first21DecisionRtRef.current ??
+      Math.max(180, Math.round(now - lastPreDecisionActionRef.current));
     const pointerIdleMs = now - lastPointerActivityRef.current;
     const wasPointerIdle = decisionRt > 5500 && pointerIdleMs > 4500;
 
     const upCard = dealerHand[0];
+    const initialTwoCards = playerHand.slice(0, 2);
     const mathSound = upCard
-      ? isActionMathematicallySound(playerHand, upCard, firstAction)
+      ? isActionMathematicallySound(initialTwoCards, upCard, firstAction, demoProfile.gameFamiliarity)
       : true;
 
     let currentShoe = [...shoe];
@@ -866,6 +1033,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       isAnchorHand: anchorPass !== null,
       anchorPassNumber: anchorPass,
       decisionRtMs: decisionRt,
+      playerCardCount: finalPlayerCards.length,
       playerFinalTotal: pEval.total,
       dealerFinalTotal: dEval.total,
       outcome,
@@ -878,7 +1046,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       betPlacementRtMs: lastBetCornerRtMs,
       sideRuleCondition: cond,
       sideRuleCorrect: sideRuleOk,
-      isPausedOrBlurred: hadInterruptionThisHand || isPaused,
+      isPausedOrBlurred: hadInterruptionThisHand || effectivePaused,
       postPauseWarmup: isPostPauseWarmupHand,
       pointerIdleDuringTrial: wasPointerIdle
     };
@@ -902,7 +1070,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       rtMs: decisionRt,
       isCorrect: mathSound,
       maxFrameDeltaMs: 16.7,
-      modeSwitchInterrupted: hadInterruptionThisHand || isPaused
+      modeSwitchInterrupted: hadInterruptionThisHand || effectivePaused
     });
 
     syncAllTelemetryToApp(
@@ -911,7 +1079,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       discardSnapOpportunities,
       discardPeekCount,
       clockDurationSec,
-      clockNoonErrorDeg
+      clockNoonErrorDeg,
+      clockAnchorMeanErrDeg
     );
 
     if (outcome === 'BLACKJACK') {
@@ -937,13 +1106,18 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const handlePlayerHit = () => {
     if (tableStage !== 'PLAYER_TURN' || shoe.length === 0) return;
-    lastPointerActivityRef.current = performance.now();
-    const nextShoe = [...shoe];
-    const drawn = { ...nextShoe.pop()! };
-    if (!currentHandHadUpsideDown && ASYMMETRIC_RANKS.includes(drawn.rank)) {
-      drawn.isUpsideDown = true;
-      setCurrentHandHadUpsideDown(true);
+    const now = performance.now();
+    if (first21DecisionRtRef.current === null) {
+      first21DecisionRtRef.current = Math.max(
+        180,
+        Math.round(now - lastPreDecisionActionRef.current)
+      );
     }
+    lastPointerActivityRef.current = now;
+    const nextShoe = [...shoe];
+    // Keep hit cards upright so 180° orientation probes strictly follow the balanced initial-deal schedule
+    // and never penalize a player on an instant-21 or instant-bust draw!
+    const drawn = { ...nextShoe.pop()!, isUpsideDown: false };
     const nextHand = [...playerHand, drawn];
     setShoe(nextShoe);
     setPlayerHand(nextHand);
@@ -956,13 +1130,27 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const handlePlayerStand = () => {
     if (tableStage !== 'PLAYER_TURN') return;
-    lastPointerActivityRef.current = performance.now();
+    const now = performance.now();
+    if (first21DecisionRtRef.current === null) {
+      first21DecisionRtRef.current = Math.max(
+        180,
+        Math.round(now - lastPreDecisionActionRef.current)
+      );
+    }
+    lastPointerActivityRef.current = now;
     finalizeHand(playerHand, 'STAND', currentBet);
   };
 
   const handlePlayerDouble = () => {
     if (tableStage !== 'PLAYER_TURN' || shoe.length === 0) return;
-    lastPointerActivityRef.current = performance.now();
+    const now = performance.now();
+    if (first21DecisionRtRef.current === null) {
+      first21DecisionRtRef.current = Math.max(
+        180,
+        Math.round(now - lastPreDecisionActionRef.current)
+      );
+    }
+    lastPointerActivityRef.current = now;
     const nextShoe = [...shoe];
     const drawn = { ...nextShoe.pop()!, isUpsideDown: false };
     const nextHand = [...playerHand, drawn];
@@ -1089,10 +1277,13 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     setClockNoonHandDeg(null);
     setClockDurationSec(null);
     setClockNoonErrorDeg(null);
+    setClockAnchorMeanErrDeg(null);
     setFalseFlipTaps(0);
+    setWrongCornerTapCount(0);
+    setCornerHintMessage('');
     setShowTesterLab(false);
-    cornerOnsetRef.current = performance.now();
-    setTableStage('PLACE_CORNER_BET');
+    setSetupBarExpanded(true);
+    setTableStage('WARMUP_INTRO');
   };
 
   const handleExportSessionsJson = () => {
@@ -1190,133 +1381,173 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   return (
     <div className="space-y-5 max-w-5xl mx-auto">
       {/* =====================================================================
-          PLAYER / FAMILY MEMBER PROFILE & TIME-CAP BAR
-          Quickly switch between yourself and family members, set exact age/education,
-          and pick 2:00 (Fast Test), 3:30 (Clinic Pillar), or 5:00 (Full Shoe).
+          AUTO-COLLAPSING PLAYER / FAMILY SETUP BAR
+          Expanded before sitting at the table; collapses into a cozy 1-line lounge pill
+          during play so family members NEVER feel like they are taking a clinical test!
          ===================================================================== */}
-      <div className="rounded-2xl bg-slate-950/90 border border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="font-extrabold uppercase tracking-wider text-sky-400">
-            👤 Player / Tester:
-          </span>
+      {setupBarExpanded ? (
+        <div className="rounded-2xl bg-slate-950/90 border border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="font-extrabold uppercase tracking-wider text-sky-400">
+              👤 Player Setup:
+            </span>
 
-          <select
-            value={
-              [
-                'Me (Primary Tester)',
-                'Spouse / Partner',
-                'Parent / Older Relative',
-                'Sibling / Adult Child',
-                'Friend / Guest'
-              ].includes(playerLabel)
-                ? playerLabel
-                : 'CUSTOM'
-            }
-            onChange={(e) => {
-              if (e.target.value !== 'CUSTOM') {
-                setPlayerLabel(e.target.value);
+            <select
+              value={
+                [
+                  'Me (Primary Tester)',
+                  'Spouse / Partner',
+                  'Parent / Older Relative',
+                  'Sibling / Adult Child',
+                  'Friend / Guest'
+                ].includes(playerLabel)
+                  ? playerLabel
+                  : 'CUSTOM'
               }
-            }}
-            className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-amber-300 font-bold cursor-pointer"
-          >
-            <option value="Me (Primary Tester)">Me (Primary Tester)</option>
-            <option value="Spouse / Partner">Spouse / Partner</option>
-            <option value="Parent / Older Relative">Parent / Older Relative</option>
-            <option value="Sibling / Adult Child">Sibling / Adult Child</option>
-            <option value="Friend / Guest">Friend / Guest</option>
-            <option value="CUSTOM">Custom Name...</option>
-          </select>
+              onChange={(e) => {
+                if (e.target.value !== 'CUSTOM') {
+                  setPlayerLabel(e.target.value);
+                }
+              }}
+              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-amber-300 font-bold cursor-pointer"
+            >
+              <option value="Me (Primary Tester)">Me (Primary Tester)</option>
+              <option value="Spouse / Partner">Spouse / Partner</option>
+              <option value="Parent / Older Relative">Parent / Older Relative</option>
+              <option value="Sibling / Adult Child">Sibling / Adult Child</option>
+              <option value="Friend / Guest">Friend / Guest</option>
+              <option value="CUSTOM">Custom Name...</option>
+            </select>
 
-          <input
-            type="text"
-            value={playerLabel}
-            onChange={(e) => setPlayerLabel(e.target.value)}
-            placeholder="Name / Initials"
-            className="w-36 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold"
-          />
-
-          <label className="flex items-center gap-1 text-slate-300 font-semibold">
-            Age:
             <input
-              type="number"
-              min={18}
-              max={99}
-              value={demoProfile.ageYears}
-              onChange={(e) =>
-                setDemoProfile((p) => ({
-                  ...p,
-                  ageYears: Math.min(99, Math.max(18, Number(e.target.value) || 65))
-                }))
-              }
-              className="w-14 px-1.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold text-center"
+              type="text"
+              value={playerLabel}
+              onChange={(e) => setPlayerLabel(e.target.value)}
+              placeholder="Name / Initials"
+              className="w-36 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold"
             />
-          </label>
 
-          <label className="flex items-center gap-1 text-slate-300 font-semibold">
-            Edu:
-            <select
-              value={demoProfile.educationYears}
-              onChange={(e) =>
-                setDemoProfile((p) => ({ ...p, educationYears: Number(e.target.value) }))
-              }
-              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
-            >
-              <option value={10}>10y (Some HS)</option>
-              <option value={12}>12y (High School)</option>
-              <option value={14}>14y (Assoc / Trade)</option>
-              <option value={16}>16y (Bachelor’s)</option>
-              <option value={18}>18y (Master’s)</option>
-              <option value={20}>20y (MD / PhD / JD)</option>
-            </select>
-          </label>
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Age:
+              <input
+                type="number"
+                min={18}
+                max={99}
+                value={demoProfile.ageYears}
+                onChange={(e) =>
+                  setDemoProfile((p) => ({
+                    ...p,
+                    ageYears: Math.min(99, Math.max(18, Number(e.target.value) || 65))
+                  }))
+                }
+                className="w-14 px-1.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold text-center"
+              />
+            </label>
 
-          <label className="flex items-center gap-1 text-slate-300 font-semibold">
-            Cards:
-            <select
-              value={demoProfile.gameFamiliarity}
-              onChange={(e) =>
-                setDemoProfile((p) => ({
-                  ...p,
-                  gameFamiliarity: e.target.value as 'LOW' | 'MODERATE' | 'HIGH'
-                }))
-              }
-              className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
-            >
-              <option value="LOW">Rarely Plays</option>
-              <option value="MODERATE">Casual Player</option>
-              <option value="HIGH">Avid Player</option>
-            </select>
-          </label>
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Edu:
+              <select
+                value={demoProfile.educationYears}
+                onChange={(e) =>
+                  setDemoProfile((p) => ({ ...p, educationYears: Number(e.target.value) }))
+                }
+                className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
+              >
+                <option value={10}>10y (Some HS)</option>
+                <option value={12}>12y (High School)</option>
+                <option value={14}>14y (Assoc / Trade)</option>
+                <option value={16}>16y (Bachelor’s)</option>
+                <option value={18}>18y (Master’s)</option>
+                <option value={20}>20y (MD / PhD / JD)</option>
+              </select>
+            </label>
 
-          <label className="flex items-center gap-1 text-slate-300 font-semibold">
-            Time Cap:
-            <select
-              value={targetDurationSec}
-              onChange={(e) => setTargetDurationSec(Number(e.target.value))}
-              className="px-2 py-1 rounded-lg bg-emerald-950 border border-emerald-500/60 text-emerald-300 font-extrabold cursor-pointer"
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Cards:
+              <select
+                value={demoProfile.gameFamiliarity}
+                onChange={(e) =>
+                  setDemoProfile((p) => ({
+                    ...p,
+                    gameFamiliarity: e.target.value as 'LOW' | 'MODERATE' | 'HIGH'
+                  }))
+                }
+                className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-white font-bold cursor-pointer"
+              >
+                <option value="LOW">Rarely Plays</option>
+                <option value="MODERATE">Casual Player</option>
+                <option value="HIGH">Avid Player</option>
+              </select>
+            </label>
+
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Time Cap:
+              <select
+                value={targetDurationSec}
+                onChange={(e) => setTargetDurationSec(Number(e.target.value))}
+                className="px-2 py-1 rounded-lg bg-emerald-950 border border-emerald-500/60 text-emerald-300 font-extrabold cursor-pointer"
+              >
+                <option value={120}>2:00 (Fast Family/Bug Test)</option>
+                <option value={210}>3:30 (Clinic Pillar Cap)</option>
+                <option value={300}>5:00 (Full 5-Min Shoe)</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {tableStage !== 'WARMUP_INTRO' && (
+              <button
+                type="button"
+                onClick={() => setSetupBarExpanded(false)}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold cursor-pointer"
+              >
+                ▲ Hide Setup
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowTesterLab((v) => !v)}
+              className={`px-3 py-1.5 rounded-lg font-extrabold text-[11px] border cursor-pointer ${
+                showTesterLab
+                  ? 'bg-sky-700 border-sky-300 text-white'
+                  : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-sky-300'
+              }`}
             >
-              <option value={120}>2:00 (Fast Family/Bug Test)</option>
-              <option value={210}>3:30 (Clinic Pillar Cap)</option>
-              <option value={300}>5:00 (Full 5-Min Shoe)</option>
-            </select>
-          </label>
+              🔬 {showTesterLab ? 'Hide Outcome Lab' : `Outcome Lab (${savedSessions.length})`}
+            </button>
+          </div>
         </div>
-
-        <button
-          type="button"
-          onClick={() => setShowTesterLab((v) => !v)}
-          className={`px-3 py-1.5 rounded-lg font-extrabold text-[11px] border cursor-pointer ${
-            showTesterLab
-              ? 'bg-sky-700 border-sky-300 text-white'
-              : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-sky-300'
-          }`}
-        >
-          🔬 {showTesterLab ? 'Hide Tester Lab (Clean Player View)' : `Open Tester Outcome Lab (${savedSessions.length} Saved)`}
-        </button>
-      </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs">
+          <span className="text-slate-300 font-semibold">
+            👤 Seated at Table: <strong className="text-amber-300">{playerLabel}</strong> •{' '}
+            {formatMmSs(targetDurationSec)} Shoe
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSetupBarExpanded(true)}
+              className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-semibold cursor-pointer"
+            >
+              ⚙️ Switch Player / Time
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowTesterLab((v) => !v)}
+              className={`px-2.5 py-1 rounded-lg font-bold border cursor-pointer ${
+                showTesterLab
+                  ? 'bg-sky-700 border-sky-300 text-white'
+                  : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-sky-300'
+              }`}
+            >
+              🔬 {showTesterLab ? 'Hide Outcome Lab' : `Outcome Lab (${savedSessions.length})`}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* =====================================================================
-          TOP CASINO RAIL: Shoe Clock with Hard Cap, Bankroll & Pause/Finish Controls
+          TOP CASINO RAIL: Shoe Clock with Hard Cap, Bankroll & Finish Controls
          ===================================================================== */}
       <div className="rounded-2xl bg-slate-950 border-2 border-emerald-500/50 p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg">
         <div className="flex flex-wrap items-center gap-3">
@@ -1334,7 +1565,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                   : 'border-sky-500/40 text-sky-300'
               }`}
             >
-              ⏱️ Shoe Clock: {formatMmSs(elapsedSec)} / {formatMmSs(targetDurationSec)}
+              ⏱️ Shoe Time: {formatMmSs(elapsedSec)} / {formatMmSs(targetDurationSec)}
               {elapsedSec >= targetDurationSec && tableStage === 'PLAYER_TURN'
                 ? ' (Final Hand!)'
                 : ''}
@@ -1363,27 +1594,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               onClick={handleCompleteShoeAndSave}
               className="px-3 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 border border-emerald-400 text-xs font-extrabold text-white cursor-pointer"
             >
-              🏁 Finish &amp; See Outcome ({handRecords.length} Hands)
+              🏁 Cash Out &amp; See Outcome ({handRecords.length} Hands)
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              const nextPaused = !isPaused;
-              setIsPaused(nextPaused);
-              if (nextPaused) {
-                setHadInterruptionThisHand(true);
-              } else {
-                // Mark the next hand after resume as post-pause re-orientation so it doesn't skew RT moments
-                setIsPostPauseWarmupHand(true);
-                handOnsetRef.current = performance.now();
-                cornerOnsetRef.current = performance.now();
-              }
-            }}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-xs font-bold text-slate-200 cursor-pointer"
-          >
-            {isPaused ? '▶ Resume' : '☕ Pause'}
-          </button>
         </div>
       </div>
 
@@ -1394,13 +1607,17 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
         <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 sm:p-8 text-center space-y-6 shadow-2xl">
           <div className="space-y-2 max-w-2xl mx-auto">
             <div className="inline-block px-3.5 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-xs font-extrabold uppercase tracking-wider text-amber-300">
-              5-Minute Casino Shoe • Zero Interrupting Quizzes
+              {formatMmSs(targetDurationSec)} Casino Shoe • Zero Interrupting Quizzes
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
               Welcome to the 21 Club Blackjack Table
             </h2>
             <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
-              Play 5 minutes of classic <strong>Blackjack 21</strong> (beat the Dealer without going over 21). Three natural table bonuses are built right onto the felt:
+              Play classic <strong>Blackjack 21</strong> (beat the Dealer without going over 21).{' '}
+              <span className="text-amber-200 font-semibold">
+                2–10 = face value • J, Q, K = 10 • Ace = 11 or 1.
+              </span>{' '}
+              Three fun table bonuses sit right on the felt:
             </p>
           </div>
 
@@ -1428,7 +1645,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 3. Noon Happy Hour (2x Payout)
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                Set the Pit Boss Clock to <strong>Noon (12:00)</strong> in under 30 seconds (no timer bar!) to unlock <strong>2x Double Payouts</strong>!
+                Place the 4 main hours (<strong>12, 3, 6, 9</strong>) and set the hands to <strong>Noon</strong> in under 30 seconds to unlock <strong>2x Double Payouts</strong>!
               </p>
             </div>
           </div>
@@ -1436,6 +1653,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
           <button
             type="button"
             onClick={() => {
+              setSetupBarExpanded(false);
+              setShowTesterLab(false);
               cornerOnsetRef.current = performance.now();
               setTableStage('PLACE_CORNER_BET');
             }}
@@ -1447,17 +1666,20 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       )}
 
       {/* =====================================================================
-          STAGE 1: 4-CORNER CHIP BETTING FELT (Silently Samples Q1, Q2, Q3, Q4)
+          STAGE 1: 4-CORNER CHIP BETTING FELT (Strictly Enforces Target Quadrant!)
          ===================================================================== */}
       {tableStage === 'PLACE_CORNER_BET' && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 space-y-5 shadow-2xl">
           <div className="text-center space-y-1">
             <div className="text-xs font-extrabold uppercase tracking-wider text-amber-300">
-              Deal Hand #{handNumber} • Tap the Glowing Corner Chip Stack
+              Deal Hand #{handNumber} • Tap the Glowing Gold Chip Stack
             </div>
             <h3 className="text-xl font-extrabold text-white">
-              Tap the Illuminated Chip Stack in Corner {activeBetCorner} to Deal Your Cards!
+              Tap the Illuminated Gold Chip Stack to Deal Your Cards!
             </h3>
+            {cornerHintMessage && (
+              <div className="text-xs font-bold text-amber-300 pt-1">{cornerHintMessage}</div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -1477,15 +1699,15 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                   onClick={() => handleDealFromCornerChip(spot.q, spot.chip)}
                   className={`min-h-32 rounded-2xl border-2 p-4 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer ${
                     isTarget
-                      ? 'bg-emerald-900/80 hover:bg-emerald-800 border-amber-400 ring-4 ring-amber-400/40 shadow-xl'
-                      : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800 opacity-75'
+                      ? 'bg-emerald-900/85 hover:bg-emerald-800 border-amber-400 ring-4 ring-amber-400/40 shadow-xl'
+                      : 'bg-slate-950/50 hover:bg-slate-900/70 border-slate-800/80 opacity-55'
                   }`}
                 >
                   <div
                     className={`w-14 h-14 rounded-full flex items-center justify-center font-extrabold text-base border-4 ${
                       isTarget
                         ? 'bg-amber-400 text-slate-950 border-white shadow-md'
-                        : 'bg-slate-800 text-slate-400 border-slate-600'
+                        : 'bg-slate-800 text-slate-500 border-slate-700'
                     }`}
                   >
                     ${spot.chip}
@@ -1520,7 +1742,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                   type="button"
                   disabled={sideRuleClaimed}
                   onClick={() => {
-                    lastPointerActivityRef.current = performance.now();
+                    const now = performance.now();
+                    lastPointerActivityRef.current = now;
+                    lastPreDecisionActionRef.current = now;
                     setSideRuleClaimed(true);
                     if (isSidePotConditionMet()) {
                       setBankroll((b) => b + 40);
@@ -1560,7 +1784,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      lastPointerActivityRef.current = performance.now();
+                      const now = performance.now();
+                      lastPointerActivityRef.current = now;
+                      lastPreDecisionActionRef.current = now;
                       if (!discardPeekOpen) {
                         setDiscardPeekOpen(true);
                         setDiscardPeekCount((c) => c + 1);
@@ -1575,7 +1801,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                     type="button"
                     disabled={discardSnapClaimedThisHand}
                     onClick={() => {
-                      lastPointerActivityRef.current = performance.now();
+                      const now = performance.now();
+                      lastPointerActivityRef.current = now;
+                      lastPreDecisionActionRef.current = now;
                       setDiscardSnapClaimedThisHand(true);
                       if (isDiscardSnapMatchValid()) {
                         setBankroll((b) => b + 50);
@@ -1609,7 +1837,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 Dealer’s Hand{' '}
                 {dealerHoleRevealed
                   ? `(Total: ${dEval.total}${dEval.isBust ? ' — BUST!' : ''})`
-                  : `(Up-Card: ${dealerHand[0]?.rank ?? ''}${dealerHand[0]?.suit ?? ''})`}
+                  : '(1 Up-Card, 1 Hole Card)'}
               </div>
               <div className="flex flex-wrap justify-center items-center gap-3 min-h-36">
                 {dealerHand.map((c, idx) => {
@@ -1641,7 +1869,11 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                   Your Hand (${currentBet} Bet)
                 </span>
                 <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950 border border-emerald-400 text-xs font-extrabold text-emerald-300">
-                  {pEval.isSoft ? `Soft ${pEval.total}` : `Total: ${pEval.total}`}
+                  {pEval.isBlackjack
+                    ? '🎉 NATURAL 21!'
+                    : tableStage === 'HAND_RESULT'
+                    ? `Final Total: ${pEval.total}${pEval.isBust ? ' (Bust)' : ''}`
+                    : `${playerHand.length} Cards on Felt`}
                 </span>
               </div>
 
@@ -1664,23 +1896,29 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
           {tableStage === 'PLAYER_TURN' ? (
             <div className="flex flex-wrap justify-center gap-4 pt-1">
-              <button
-                type="button"
-                onClick={handlePlayerHit}
-                className="min-h-14 px-8 py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-lg shadow-lg cursor-pointer"
-              >
-                🃏 Hit (Draw Card)
-              </button>
+              {!pEval.isBlackjack && (
+                <button
+                  type="button"
+                  onClick={handlePlayerHit}
+                  className="min-h-14 px-8 py-3.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-lg shadow-lg cursor-pointer"
+                >
+                  🃏 Hit (Draw Card)
+                </button>
+              )}
 
               <button
                 type="button"
                 onClick={handlePlayerStand}
-                className="min-h-14 px-8 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-lg shadow-lg cursor-pointer"
+                className={`min-h-14 px-8 py-3.5 rounded-2xl font-extrabold text-lg shadow-lg cursor-pointer ${
+                  pEval.isBlackjack
+                    ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 ring-4 ring-amber-300/50'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                }`}
               >
-                ✋ Stand ({pEval.total})
+                {pEval.isBlackjack ? '🎉 Claim Blackjack 21! (1.5x)' : '✋ Stand (Hold)'}
               </button>
 
-              {playerHand.length === 2 && (
+              {playerHand.length === 2 && !pEval.isBlackjack && (
                 <button
                   type="button"
                   onClick={handlePlayerDouble}
@@ -1697,7 +1935,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 onClick={handleAdvanceToNextHand}
                 className="min-h-14 px-10 py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-lg shadow-xl cursor-pointer"
               >
-                Deal Next Hand (#{handNumber + 1}) &rarr;
+                {elapsedSec >= targetDurationSec
+                  ? '🏁 Finish Shoe & View Summary →'
+                  : `Deal Next Hand (#${handNumber + 1}) →`}
               </button>
             </div>
           )}
@@ -1705,32 +1945,33 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       )}
 
       {/* =====================================================================
-          STAGE 4: HAPPY HOUR PIT BOSS CLOCK BONUS (NO TIMER BAR! 30s Noon Clock)
+          STAGE 4: BRISK 5-TAP PIT BOSS CLOCK BONUS (12, 3, 6, 9 + Noon Hands!)
+          Zero 13-tap tedium; scores genuine spatial anchor error + Noon hand error!
          ===================================================================== */}
       {tableStage === 'PIT_CLOCK_NOON_BONUS' && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-amber-400 p-6 text-center space-y-4 shadow-2xl">
           <div className="inline-block px-4 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-xs font-extrabold uppercase tracking-wider text-amber-300">
-            🕰️ Pit Boss Happy Hour • Unlock 2x Double Payouts &amp; +$500 Under 30 Seconds!
+            🕰️ Pit Boss Happy Hour • 5 Quick Taps Under 30 Seconds for 2x Payouts &amp; +$500!
           </div>
           <h3 className="text-xl sm:text-2xl font-extrabold text-white">
-            Draw the Pit Boss Clock with All 12 Hours and Set the Hands at Noon
+            Place the 4 Main Clock Numbers (12, 3, 6, 9) &amp; Point the Hands to Noon
           </h3>
 
-          {clockPlacedHours.length < 12 ? (
-            <div className="text-sm font-bold text-emerald-300">
-              Tap on the blank clock face where Hour{' '}
-              <span className="px-2.5 py-0.5 rounded bg-amber-400 text-slate-950 font-extrabold">
-                {HOURS_ORDER[clockPlacedHours.length]}
+          {clockPlacedHours.length < CLOCK_ANCHOR_HOURS.length ? (
+            <div className="text-base font-bold text-emerald-300">
+              Tap on the rim where{' '}
+              <span className="px-3 py-0.5 rounded-lg bg-amber-400 text-slate-950 font-extrabold">
+                {CLOCK_ANCHOR_HOURS[clockPlacedHours.length].hour} o&rsquo;clock
               </span>{' '}
-              belongs ({clockPlacedHours.length}/12 placed)
+              belongs ({clockPlacedHours.length + 1} of 4 anchors)
             </div>
           ) : clockNoonHandDeg === null ? (
-            <div className="text-sm font-bold text-amber-300">
-              All 12 hours placed! Now tap where the hands point at <strong>Noon (12:00)</strong>!
+            <div className="text-base font-bold text-amber-300">
+              Great! Now tap once to point both clock hands to <strong>Noon (12:00)</strong>!
             </div>
           ) : (
-            <div className="text-sm font-bold text-emerald-300">
-              ✓ Pit Boss Clock Set to Noon! Tap &ldquo;Unlock 2x Payouts&rdquo; below!
+            <div className="text-base font-bold text-emerald-300">
+              ✓ Pit Boss Clock Set! Tap &ldquo;Lock In Pit Clock&rdquo; below!
             </div>
           )}
 
@@ -1744,14 +1985,19 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 let deg = Math.atan2(y - 130, x - 130) * (180 / Math.PI) + 90;
                 if (deg < 0) deg += 360;
 
-                if (clockPlacedHours.length < 12) {
-                  const hr = HOURS_ORDER[clockPlacedHours.length];
-                  setClockPlacedHours((prev) => [...prev, { hour: hr, x, y, deg }]);
+                if (clockPlacedHours.length < CLOCK_ANCHOR_HOURS.length) {
+                  const spec = CLOCK_ANCHOR_HOURS[clockPlacedHours.length];
+                  const rawDiff = Math.abs(deg - spec.expectedDeg);
+                  const errDeg = Math.round(Math.min(rawDiff, 360 - rawDiff));
+                  setClockPlacedHours((prev) => [
+                    ...prev,
+                    { hour: spec.hour, x, y, deg, errDeg }
+                  ]);
                 } else {
                   setClockNoonHandDeg(deg);
                 }
               }}
-              className="w-64 h-64 bg-slate-950 rounded-full border-4 border-amber-400 shadow-2xl cursor-crosshair select-none"
+              className="w-72 h-72 bg-slate-950 rounded-full border-4 border-amber-400 shadow-2xl cursor-crosshair select-none"
             >
               <circle cx="130" cy="130" r="118" fill="#0F172A" stroke="#475569" strokeWidth="2.5" />
               <circle cx="130" cy="130" r="5" fill="#FBBF24" />
@@ -1773,12 +2019,12 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
               {clockPlacedHours.map((h) => (
                 <g key={h.hour}>
-                  <circle cx={h.x} cy={h.y} r="14" fill="#0284C7" stroke="#BAE6FD" strokeWidth="2" />
+                  <circle cx={h.x} cy={h.y} r="16" fill="#0284C7" stroke="#BAE6FD" strokeWidth="2.5" />
                   <text
                     x={h.x}
                     y={h.y}
                     fill="#FFFFFF"
-                    fontSize="12"
+                    fontSize="14"
                     fontWeight="bold"
                     textAnchor="middle"
                     dominantBaseline="central"
@@ -1803,22 +2049,31 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </button>
             <button
               type="button"
+              disabled={clockPlacedHours.length < CLOCK_ANCHOR_HOURS.length || clockNoonHandDeg === null}
               onClick={() => {
                 const dur = Number(((performance.now() - clockStartMs) / 1000).toFixed(1));
                 const err =
                   clockNoonHandDeg === null
-                    ? 15
+                    ? 25
                     : Math.round(Math.min(clockNoonHandDeg, 360 - clockNoonHandDeg));
+                const meanAnchorErr =
+                  clockPlacedHours.length > 0
+                    ? Math.round(
+                        clockPlacedHours.reduce((s, item) => s + item.errDeg, 0) /
+                          clockPlacedHours.length
+                      )
+                    : 25;
                 setClockDurationSec(dur);
                 setClockNoonErrorDeg(err);
+                setClockAnchorMeanErrDeg(meanAnchorErr);
                 setClockCompletedOnce(true);
                 setDoublePayoutActive(true);
-                if (dur <= 30) setBankroll((b) => b + 500);
-                else setBankroll((b) => b + 200);
+                if (dur <= 30 && err <= 25 && meanAnchorErr <= 25) setBankroll((b) => b + 500);
+                else setBankroll((b) => b + 250);
                 cornerOnsetRef.current = performance.now();
                 setTableStage('PLACE_CORNER_BET');
               }}
-              className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm shadow-lg cursor-pointer"
+              className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-extrabold text-sm shadow-lg cursor-pointer"
             >
               ✓ Lock In Pit Clock &amp; Unlock 2x Payouts &rarr;
             </button>
@@ -1891,8 +2146,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               <p className="text-[11px] text-slate-400">
                 Player: <strong className="text-amber-300">{playerLabel}</strong> • Engaged Hands:{' '}
                 <strong className="text-white">{dist.validEngagedCount}</strong> • Censored Pauses/Distractions:{' '}
-                <strong className="text-amber-300">{dist.censoredCount}</strong> • Sampling Gate:{' '}
-                <strong className="text-emerald-300">{dist.samplingAdequacy}</strong>
+                <strong className="text-amber-300">{dist.censoredCount}</strong> • Off-Target Corner Taps:{' '}
+                <strong className="text-slate-300">{wrongCornerTapCount}</strong>
               </p>
             </div>
 
@@ -1934,6 +2189,48 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </div>
           </div>
 
+          {/* 4-CHECK OUTCOME DATA USEFULNESS SCORECARD ("Is This Legit Signal or Noise?") */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-extrabold uppercase text-sky-400">
+                1. Sample Adequacy
+              </div>
+              <div className="font-bold text-white mt-0.5">{telemetryAnalytics.sampleGrade}</div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-extrabold uppercase text-emerald-400">
+                2. Single-Run Odd/Even Consistency
+              </div>
+              <div className="font-bold text-white mt-0.5">
+                {telemetryAnalytics.splitHalfDiffMs !== null
+                  ? `Odd ${telemetryAnalytics.oddMedMs}ms vs Even ${telemetryAnalytics.evenMedMs}ms (Δ=${telemetryAnalytics.splitHalfDiffMs}ms ${
+                      telemetryAnalytics.splitHalfConsistent ? '✓ Stable' : '⚠ Variable'
+                    })`
+                  : 'Play ≥4 hands to check split-half'}
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-extrabold uppercase text-amber-400">
+                3. Timing Purity (Bonus-Decoupled)
+              </div>
+              <div className="font-bold text-white mt-0.5">
+                1st-Decision RT • {dist.censoredCount} Pauses Filtered
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <div className="text-[10px] font-extrabold uppercase text-purple-400">
+                4. Probe Coverage
+              </div>
+              <div className="font-bold text-white mt-0.5">
+                {telemetryAnalytics.upsideDownOpportunities} Flip • {discardSnapOpportunities} Snap •{' '}
+                {clockCompletedOnce ? `Clock ${clockAnchorMeanErrDeg ?? 0}°/${clockNoonErrorDeg ?? 0}°` : 'Clock Pending'}
+              </div>
+            </div>
+          </div>
+
           {/* Within-Person Signal vs. Noise Reproducibility Verdict */}
           <div
             className={`p-3 rounded-xl border text-xs font-bold ${
@@ -1945,7 +2242,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             }`}
           >
             <div className="uppercase text-[10px] tracking-wider text-sky-300 mb-0.5">
-              🔁 Within-Person Reproducibility Check (Is It Real Signal or Random Noise?):
+              🔁 Within-Person Reproducibility Check (Across Saved Runs):
             </div>
             <div>{reproducibilitySummary.verdictText}</div>
           </div>

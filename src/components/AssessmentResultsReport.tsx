@@ -141,8 +141,9 @@ export const AssessmentResultsReport: React.FC<AssessmentResultsReportProps> = (
                   Path Efficiency: <strong>{Math.round(s03.medianPathEfficiency * 100)}%</strong>
                 </div>
                 <div className="text-xs text-slate-400">
-                  Quadrant Asymmetry Test: H = {s03.quadrantKruskalWallisH ?? 0} (p ={' '}
-                  {s03.quadrantKruskalWallisP ?? 1})
+                  {s03.quadrantKruskalWallisH != null
+                    ? `Quadrant Asymmetry Test: H = ${s03.quadrantKruskalWallisH} (p = ${s03.quadrantKruskalWallisP ?? 1})`
+                    : 'Quadrant Asymmetry: Needs ≥3 deals/corner (≥12 hands) for Kruskal-Wallis p-value'}
                 </div>
               </div>
             ) : (
@@ -218,7 +219,10 @@ export const AssessmentResultsReport: React.FC<AssessmentResultsReportProps> = (
                   </strong>
                 </div>
                 <div>
-                  True Embedded Hits: <strong>{s21.trueObjectHitCount} / 8</strong>
+                  True Embedded Hits:{' '}
+                  <strong>
+                    {s21.trueObjectHitCount} / {s21.totalNoisePlates ?? 8}
+                  </strong>
                 </div>
                 <div className="text-xs text-slate-400">
                   Mamiya et al. (2016) &amp; PMID: 42524732 (2026) protocol

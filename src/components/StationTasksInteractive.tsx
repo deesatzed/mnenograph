@@ -810,15 +810,17 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="px-3.5 py-1.5 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-xs font-extrabold uppercase tracking-wider text-emerald-300">
               {isBlackjackStudioActive
-                ? '🃏 Featured: 5-Minute Blackjack 21 Studio'
+                ? '🃏 21 Club Blackjack Lounge'
                 : `🎮 ${meta.title}`}
             </span>
-            <span
-              data-testid="adaptive-tier-badge"
-              className="px-3 py-1 rounded-lg bg-slate-900 border border-amber-500/40 text-xs font-bold text-amber-300"
-            >
-              Level {adaptiveTier} • 🪙 {gameScore} Pts
-            </span>
+            {!isBlackjackStudioActive && (
+              <span
+                data-testid="adaptive-tier-badge"
+                className="px-3 py-1 rounded-lg bg-slate-900 border border-amber-500/40 text-xs font-bold text-amber-300"
+              >
+                Level {adaptiveTier} • 🪙 {gameScore} Pts
+              </span>
+            )}
 
             <button
               type="button"
@@ -826,8 +828,8 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
               className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-sky-500/50 text-xs font-bold text-sky-300 cursor-pointer"
             >
               {isBlackjackStudioActive
-                ? 'Switch to 6-Game Tour (Pong / Go-Fish / Solitaire)'
-                : '🃏 Return to 5-Minute Blackjack 21'}
+                ? '🎲 More Games (Pong / Go-Fish / Solitaire)'
+                : '🃏 Return to Blackjack 21 Lounge'}
             </button>
           </div>
 
@@ -852,10 +854,10 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
               className={`min-h-11 px-4 py-2 rounded-xl border text-xs font-bold cursor-pointer ${
                 isPaused
                   ? 'bg-emerald-700 hover:bg-emerald-600 border-emerald-400 text-white'
-                  : 'bg-rose-950/80 hover:bg-rose-900 border-rose-500/60 text-rose-200'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200'
               }`}
             >
-              {isPaused ? '▶ Resume Game' : '⏹ Pause'}
+              {isPaused ? '▶ Resume Game' : '☕ Pause'}
             </button>
           </div>
         </div>
@@ -936,6 +938,7 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       {isBlackjackStudioActive && (
         <BlackjackFiveMinGame
           presentationMode={presentationMode}
+          externalPaused={isPaused}
           onAppendTrialEvent={onAppendTrialEvent}
           onUpdateStationTelemetry={onUpdateStationTelemetry}
           onFinishSession={() => {
@@ -2575,35 +2578,37 @@ export const StationTasksInteractive: React.FC<StationTasksInteractiveProps> = (
       {/* =====================================================================
           SUBTLE FOOTER NAVIGATION
          ===================================================================== */}
-      <div className="mt-6 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-        <span>
-          {pagePhase === 'INTRO_DEMO'
-            ? 'Warmup & Rules'
-            : pagePhase === 'ACTIVE_TEST'
-            ? 'Live Game Table'
-            : 'Game Complete'}
-        </span>
-        <div className="flex items-center gap-3">
-          {meta.nextStationId && pagePhase !== 'ACTIVITY_COMPLETE' && (
-            <button
-              type="button"
-              onClick={() => onSelectStation(meta.nextStationId!)}
-              className="text-slate-400 hover:text-slate-200 underline cursor-pointer"
-            >
-              Skip to Game {meta.num + 1} &rarr;
-            </button>
-          )}
-          {onFinishAssessment && (
-            <button
-              type="button"
-              onClick={onFinishAssessment}
-              className="text-slate-400 hover:text-slate-200 underline cursor-pointer"
-            >
-              Provider Results Portal
-            </button>
-          )}
+      {!isBlackjackStudioActive && (
+        <div className="mt-6 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          <span>
+            {pagePhase === 'INTRO_DEMO'
+              ? 'Warmup & Rules'
+              : pagePhase === 'ACTIVE_TEST'
+              ? 'Live Game Table'
+              : 'Game Complete'}
+          </span>
+          <div className="flex items-center gap-3">
+            {meta.nextStationId && pagePhase !== 'ACTIVITY_COMPLETE' && (
+              <button
+                type="button"
+                onClick={() => onSelectStation(meta.nextStationId!)}
+                className="text-slate-400 hover:text-slate-200 underline cursor-pointer"
+              >
+                Skip to Game {meta.num + 1} &rarr;
+              </button>
+            )}
+            {onFinishAssessment && (
+              <button
+                type="button"
+                onClick={onFinishAssessment}
+                className="text-slate-400 hover:text-slate-200 underline cursor-pointer"
+              >
+                Outcomes &amp; Provider Portal
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

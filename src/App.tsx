@@ -184,7 +184,7 @@ export const App: React.FC = () => {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              1. Patient Assessment View
+              1. Player Game Lounge
             </button>
             <button
               type="button"
@@ -196,7 +196,7 @@ export const App: React.FC = () => {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              2. Provider &amp; Judge Results Portal
+              2. Outcomes &amp; Provider Portal
             </button>
           </div>
 
