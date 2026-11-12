@@ -100,7 +100,7 @@ export const AssessmentResultsReport: React.FC<AssessmentResultsReportProps> = (
           <span className="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-semibold text-amber-200">
             {session.isSimulatedPreset
               ? 'Simulated Case Trajectory (Heuristic Sandbox)'
-              : 'Live Session Telemetry (Unnormed Prototype)'}
+              : 'Live Telemetry • Exploratory Priors (Use Repeat-Run Z_SRB as Primary Reference)'}
           </span>
         </div>
 

@@ -1,11 +1,14 @@
 import React, { act } from 'react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import ReactDOMClient from 'react-dom/client';
 import BlackjackFiveMinGame, {
   isActionMathematicallySound,
   type BlackjackCard
 } from '../BlackjackFiveMinGame';
-import { evaluateTwoLayerSyndromeRouter } from '../../psychometrics/psychometrics';
+import {
+  computeDemographicNormedScore,
+  evaluateTwoLayerSyndromeRouter
+} from '../../psychometrics/psychometrics';
 import { getCanonicalProtocolManifest } from '../../registry/protocolRegistry';
 import type { StationTelemetryMap } from '../../types/sessionSchema';
 
@@ -39,6 +42,10 @@ function clickButtonByText(container: HTMLElement, substring: string) {
 }
 
 describe('Blackjack Human Pilot UX & Outcome Data Integrity Safeguards', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('1. Separates cautious novice risk-aversion (Stand 14 vs 7) from true arithmetic errors (Hit 19, Stand 10)', () => {
     const ten: BlackjackCard = { id: '1', rank: '10', suit: '♠', suitName: 'Spades', value: 10 };
     const four: BlackjackCard = { id: '2', rank: '4', suit: '♥', suitName: 'Hearts', value: 4 };
@@ -109,10 +116,51 @@ describe('Blackjack Human Pilot UX & Outcome Data Integrity Safeguards', () => {
       />
     );
 
+    // Helper that reads the 2 dealt player cards on the felt and plays sound Blackjack (Stand on >=15, Hit on <=14)
+    const playSoundHandDecision = () => {
+      if (container.textContent?.includes('Claim Blackjack 21!')) {
+        clickButtonByText(container, 'Claim Blackjack 21!');
+        return;
+      }
+      const cardBtns = Array.from(
+        container.querySelectorAll('button[title*="Eagle-Eye Bonus"]')
+      );
+      // Last 2 card buttons belong to Player's Hand (first 1 belongs to Dealer Up-Card)
+      const playerCardBtns = cardBtns.slice(-2);
+      const parseCardVal = (txt: string) => {
+        const clean = txt.trim();
+        if (clean.startsWith('10') || clean.startsWith('J') || clean.startsWith('Q') || clean.startsWith('K')) return 10;
+        if (clean.startsWith('A')) return 11;
+        return parseInt(clean[0], 10) || 7;
+      };
+      let sum = playerCardBtns.reduce((acc, b) => acc + parseCardVal(b.textContent ?? ''), 0);
+      if (sum === 22) sum = 12; // Two Aces
+      if (sum <= 14) {
+        clickButtonByText(container, 'Hit (Draw Card)');
+        if (container.textContent?.includes('Stand (Hold)')) {
+          clickButtonByText(container, 'Stand (Hold)');
+        }
+      } else {
+        clickButtonByText(container, 'Stand (Hold)');
+      }
+    };
+
     clickButtonByText(container, 'Sit at Blackjack Table');
 
     for (let h = 1; h <= 6; h++) {
       clickButtonByText(container, 'Tap to Bet');
+
+      // Progressive Ramp-Up Check: Hands #1-#3 hide Discard Tray & Side-Pot; Hand #4 unlocks Discard Tray; Hand #5 unlocks Side-Pot!
+      if (h <= 3) {
+        expect(container.textContent).not.toContain('Discard Tray:');
+        expect(container.textContent).not.toContain('Side-Pot:');
+      } else if (h === 4) {
+        expect(container.textContent).toContain('Discard Tray:');
+        expect(container.textContent).not.toContain('Side-Pot:');
+      } else if (h >= 5) {
+        expect(container.textContent).toContain('Discard Tray:');
+        expect(container.textContent).toContain('Side-Pot:');
+      }
 
       // Flip any 180° upside-down card on the felt (simulating a fast eagle-eye player!)
       const rotatedCardBtn = Array.from(container.querySelectorAll('button')).find((b) =>
@@ -124,21 +172,7 @@ describe('Blackjack Human Pilot UX & Outcome Data Integrity Safeguards', () => {
         });
       }
 
-      // Play basic sound action without clicking Peek Discard
-      if (container.textContent?.includes('Claim Blackjack 21!')) {
-        clickButtonByText(container, 'Claim Blackjack 21!');
-      } else {
-        // Hit once if total might be <= 11 on random hand, or Stand on Anchor #2/#6 (Soft 18)
-        if (h === 2 || h === 6) {
-          clickButtonByText(container, 'Stand (Hold)');
-        } else {
-          // Inspect card ranks on player side to avoid standing on <= 11
-          clickButtonByText(container, 'Hit (Draw Card)');
-          if (container.textContent?.includes('Stand (Hold)')) {
-            clickButtonByText(container, 'Stand (Hold)');
-          }
-        }
-      }
+      playSoundHandDecision();
 
       if (h < 6) {
         clickButtonByText(container, 'Deal Next Hand');
@@ -184,6 +218,66 @@ describe('Blackjack Human Pilot UX & Outcome Data Integrity Safeguards', () => {
     const routerResult = evaluateTwoLayerSyndromeRouter(accumulatedTelemetry, true, manifest);
     expect(routerResult.primaryLayer1Profile).toBe('PROFILE_0_UNIMPAIRED');
 
+    // Finish Run 1 (6 hands < 12) -> verify Low-N tail gate is active before pooling!
+    clickButtonByText(container, 'Cash Out & See Outcome');
+    expect(container.textContent).toContain('Low-N (6/12)');
+    expect(container.textContent).toContain('τ Gated');
+    expect(accumulatedTelemetry['S0.3']?.quadrantKruskalWallisH).toBeNull();
+
+    // Start Run 2 for the SAME player and play 6 more hands (6 + 6 = 12 pooled hands!)
+    clickButtonByText(container, 'Start Another Run');
+    clickButtonByText(container, 'Sit at Blackjack Table');
+    for (let h = 1; h <= 6; h++) {
+      clickButtonByText(container, 'Tap to Bet');
+      playSoundHandDecision();
+      if (h < 6) {
+        clickButtonByText(container, 'Deal Next Hand');
+        if (h === 4 && container.textContent?.includes('Skip Happy Hour')) {
+          clickButtonByText(container, 'Skip Happy Hour');
+        }
+      }
+    }
+
+    clickButtonByText(container, 'Cash Out & See Outcome');
+    // Multi-Run Pooling (6 + 6 = 12 hands) unlocks Pooled N=12 Tail Moments, 4-Quadrant KW H, AND S1.1 GLDI/Crowding!
+    expect(container.textContent).toContain('Pooled N=12');
+    expect(container.textContent).toContain('REPRODUCIBLE SIGNAL');
+    expect(accumulatedTelemetry['S0.3']?.quadrantKruskalWallisH).not.toBeNull();
+    expect(accumulatedTelemetry['S1.1']?.gldiRatio).not.toBeNull();
+    expect(
+      evaluateTwoLayerSyndromeRouter(accumulatedTelemetry, true, manifest).primaryLayer1Profile
+    ).toBe('PROFILE_0_UNIMPAIRED');
+
     unmount();
+  });
+
+  it('4. Adjusts expected RT for Trackpad vs Touch latency, shrinks Low-N tail weight, and tags Exploratory Literature Priors', () => {
+    const touchNorm = computeDemographicNormedScore(
+      { ageYears: 70, educationYears: 16, gameFamiliarity: 'MODERATE', inputDevice: 'TOUCH' },
+      {
+        medianRtMs: 1200,
+        exGaussianTauMs: 380,
+        bowleySkewness: 0.35,
+        mathOptimalRatePct: 90,
+        upsideDownDetectionRatePct: 100,
+        validSampleCount: 6
+      }
+    );
+    const trackpadNorm = computeDemographicNormedScore(
+      { ageYears: 70, educationYears: 16, gameFamiliarity: 'MODERATE', inputDevice: 'TRACKPAD' },
+      {
+        medianRtMs: 1200,
+        exGaussianTauMs: 380,
+        bowleySkewness: 0.35,
+        mathOptimalRatePct: 90,
+        upsideDownDetectionRatePct: 100,
+        validSampleCount: 6
+      }
+    );
+
+    expect(trackpadNorm.expectedMedianRtMs - touchNorm.expectedMedianRtMs).toBe(150);
+    expect(touchNorm.normSourceTag).toBe('SYNTHETIC_LITERATURE_PRIOR');
+    expect(touchNorm.tailWeightApplied).toBe(0.12); // Down-weighted from 0.30 because N=6 < 12
+    expect(touchNorm.normativeSummaryText).toContain('Exploratory Literature Prior');
   });
 });

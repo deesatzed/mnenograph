@@ -891,6 +891,7 @@ export interface RobustRtDistributionReport {
   censoredCount: number;
   censorBreakdown: Record<TrialCensorReason, number>;
   samplingAdequacy: 'UNDER_SAMPLED' | 'ADEQUATE_FOR_MEDIAN_IQR' | 'HIGH_POWER_FULL_MOMENTS';
+  isTailMomentsPowered: boolean; // True only when validEngagedCount >= 12
   // Robust Location & Precision
   medianRtMs: number;
   seMedianRtMs: number;
@@ -988,6 +989,7 @@ export function analyzeRobustRtDistribution(
       censoredCount,
       censorBreakdown: breakdown,
       samplingAdequacy: 'UNDER_SAMPLED',
+      isTailMomentsPowered: false,
       medianRtMs: 0,
       seMedianRtMs: 0,
       q10LeadingEdgeMs: 0,
@@ -1074,16 +1076,23 @@ export function analyzeRobustRtDistribution(
   const tailToModalRatio = mu > 0 ? tau / mu : 0;
 
   const samplingAdequacy =
-    n < 8 ? 'UNDER_SAMPLED' : n < 12 ? 'ADEQUATE_FOR_MEDIAN_IQR' : 'HIGH_POWER_FULL_MOMENTS';
+    n < 6 ? 'UNDER_SAMPLED' : n < 12 ? 'ADEQUATE_FOR_MEDIAN_IQR' : 'HIGH_POWER_FULL_MOMENTS';
+  const isTailMomentsPowered = n >= 12;
 
   let interpretation =
     'Symmetric, tightly clustered pacing (low right-tail skew & normal Ex-Gaussian tau).';
-  if (tailToModalRatio >= 0.35 || bowleySkew >= 0.28 || moorsExcess >= 0.35) {
+  if (!isTailMomentsPowered) {
+    interpretation = `Low-N tail gate active (N=${n} < 12 engaged hands): Median (${Math.round(
+      median
+    )}ms ± ${Math.round(seMedian)}ms) and MAD (${Math.round(
+      mad
+    )}ms) are actionable now; play a 5:00 shoe or pool ≥2 short runs for ≥12 hands before interpreting Ex-Gaussian τ or kurtosis.`;
+  } else if (tailToModalRatio >= 0.35 || bowleySkew >= 0.28 || moorsExcess >= 0.35) {
     interpretation =
-      'Right-skewed, heavy-tailed RT distribution (elevated Ex-Gaussian tau & Bowley skew despite fast leading-edge Q10): indicates periodic endogenous attentional micro-lapses rather than uniform motor slowing.';
+      'Right-skewed, heavy-tailed RT distribution (N≥12 powered; elevated Ex-Gaussian tau & Bowley skew despite fast leading-edge Q10): indicates periodic endogenous attentional micro-lapses rather than uniform motor slowing.';
   } else if (mu >= 1550 && tailToModalRatio < 0.25) {
     interpretation =
-      'Uniform baseline shift (elevated modal mu with low skew/tau): consistent with peripheral motor/arthritis pacing rather than cognitive fluctuation.';
+      'Uniform baseline shift (N≥12 powered; elevated modal mu with low skew/tau): consistent with peripheral motor/arthritis pacing rather than cognitive fluctuation.';
   }
 
   return {
@@ -1092,6 +1101,7 @@ export function analyzeRobustRtDistribution(
     censoredCount,
     censorBreakdown: breakdown,
     samplingAdequacy,
+    isTailMomentsPowered,
     medianRtMs: Math.round(median),
     seMedianRtMs: Math.round(seMedian),
     q10LeadingEdgeMs: Math.round(q10),
@@ -1119,19 +1129,24 @@ export function analyzeRobustRtDistribution(
 // Attainment (Years / Reserve Tier), and Prior Card/Game Familiarity.
 // ============================================================================
 
+export type InputDeviceModality = 'TOUCH' | 'MOUSE' | 'TRACKPAD';
+
 export interface DemographicProfileInput {
   ageYears: number; // e.g., 50..92
   educationYears: number; // 10=Some HS, 12=HS, 14=Assoc/Trade, 16=Bachelor, 18=Master, 20=MD/JD/PhD
   gameFamiliarity: 'LOW' | 'MODERATE' | 'HIGH';
+  inputDevice?: InputDeviceModality;
 }
 
 export interface DemographicNormedScoreReport {
   profile: DemographicProfileInput;
+  normSourceTag: 'SYNTHETIC_LITERATURE_PRIOR';
+  tailWeightApplied: number;
   expectedMedianRtMs: number;
   expectedTauLapseMs: number;
   expectedMathAccuracyPct: number;
-  zProcessingSpeedModal: number; // Based on Median / Ex-Gaussian Mu vs Age/Edu/Familiarity
-  zAttentionalStabilityTail: number; // Based on Ex-Gaussian Tau & Bowley Skew
+  zProcessingSpeedModal: number; // Based on Median / Ex-Gaussian Mu vs Age/Edu/Familiarity/Device
+  zAttentionalStabilityTail: number; // Based on Ex-Gaussian Tau & Bowley Skew (shrinks if N < 12)
   zExecutiveMathAccuracy: number; // Adjusted for Education & Card Familiarity
   zVisuospatialOrientation: number; // Upside-down 180° detection & 4-corner symmetry
   compositeDemoZ: number;
@@ -1162,6 +1177,7 @@ export function computeDemographicNormedScore(
     bowleySkewness: number;
     mathOptimalRatePct: number;
     upsideDownDetectionRatePct: number;
+    validSampleCount?: number;
   }
 ): DemographicNormedScoreReport {
   const ageCentered = profile.ageYears - 70;
@@ -1173,6 +1189,12 @@ export function computeDemographicNormedScore(
       : profile.gameFamiliarity === 'LOW'
       ? 130
       : 0;
+  const deviceOffsetMs =
+    profile.inputDevice === 'TRACKPAD'
+      ? 150
+      : profile.inputDevice === 'MOUSE'
+      ? 35
+      : 0;
   const famMathBonusPct =
     profile.gameFamiliarity === 'HIGH'
       ? 4.0
@@ -1181,10 +1203,9 @@ export function computeDemographicNormedScore(
       : 0;
 
   // 1. Expected Median Decision RT (ms):
-  // At Age 70, 14 yrs edu, moderate familiarity -> ~1,150ms
-  // Slows with age (+12ms/yr + 0.45ms/yr^2 >70); speeds up with higher edu (-18ms/yr)
+  // At Age 70, 14 yrs edu, moderate familiarity, direct touch -> ~1,150ms (+150ms trackpad, +35ms mouse)
   const expectedMedianRtMs = Math.round(
-    1150 + 12 * ageCentered + 0.45 * ageQuad - 18 * eduCentered + famBonusMs
+    1150 + 12 * ageCentered + 0.45 * ageQuad - 18 * eduCentered + famBonusMs + deviceOffsetMs
   );
   const sdMedianRtMs = 210;
   // Lower RT is faster -> positive Z when observed < expected
@@ -1193,13 +1214,14 @@ export function computeDemographicNormedScore(
   );
 
   // 2. Expected Ex-Gaussian Tau (Right-Tail Lapse Parameter in ms):
-  // Healthy aging increases tau only modestly; education has minimal effect on raw attentional lapses
+  // Shrink tail Z toward 0 when N < 12 so under-sampled 2:00 runs never swing Z_demo wildly!
+  const nValid = observed.validSampleCount ?? 12;
+  const tailPowerShrinkage = nValid >= 12 ? 1.0 : Math.max(0.25, nValid / 12);
   const expectedTauLapseMs = Math.round(190 + 2.2 * Math.max(0, ageCentered) + 0.12 * ageQuad);
   const sdTauMs = 95;
   const skewPenalty = Math.max(0, observed.bowleySkewness - 0.2) * 1.2;
-  const zAttentionalStabilityTail = Number(
-    ((expectedTauLapseMs - observed.exGaussianTauMs) / sdTauMs - skewPenalty).toFixed(2)
-  );
+  const rawTailZ = (expectedTauLapseMs - observed.exGaussianTauMs) / sdTauMs - skewPenalty;
+  const zAttentionalStabilityTail = Number((rawTailZ * tailPowerShrinkage).toFixed(2));
 
   // 3. Expected Blackjack 21 Math & Soft-Ace Optimality (%):
   // Scales strongly with Education Reserve (+1.4% per yr of edu) and Card Familiarity
@@ -1222,32 +1244,39 @@ export function computeDemographicNormedScore(
     ((observed.upsideDownDetectionRatePct - expectedUpsideDownPct) / 9.0).toFixed(2)
   );
 
+  const tailWeight = nValid >= 12 ? 0.3 : 0.12;
+  const modalWeight = nValid >= 12 ? 0.25 : 0.35;
+  const mathWeight = nValid >= 12 ? 0.25 : 0.3;
+  const visWeight = nValid >= 12 ? 0.2 : 0.23;
+
   const compositeDemoZ = Number(
     (
-      0.25 * zProcessingSpeedModal +
-      0.3 * zAttentionalStabilityTail +
-      0.25 * zExecutiveMathAccuracy +
-      0.2 * zVisuospatialOrientation
+      modalWeight * zProcessingSpeedModal +
+      tailWeight * zAttentionalStabilityTail +
+      mathWeight * zExecutiveMathAccuracy +
+      visWeight * zVisuospatialOrientation
     ).toFixed(2)
   );
   const compositePercentile = zToPercentile(compositeDemoZ);
 
-  // High-Reserve Masking Alert: Patient has >=16 yrs education, raw accuracy looks passable (>=78%),
+  // High-Reserve Masking Alert: Patient has >=16 yrs education, raw accuracy looks passable (>=75%),
   // yet their age+education adjusted Z is <= -1.35 SD!
   const highReserveMaskingAlert =
     profile.educationYears >= 16 &&
     observed.mathOptimalRatePct >= 75 &&
     compositeDemoZ <= -1.35;
 
-  let normativeSummaryText = `Within expected range for Age ${profile.ageYears}, ${profile.educationYears} yrs education (${compositePercentile}th percentile, Z = ${compositeDemoZ >= 0 ? '+' : ''}${compositeDemoZ}).`;
+  let normativeSummaryText = `[Exploratory Literature Prior] Within expected range for Age ${profile.ageYears}, ${profile.educationYears}y edu, ${profile.inputDevice ?? 'TOUCH'} (${compositePercentile}th %ile, Z_prior = ${compositeDemoZ >= 0 ? '+' : ''}${compositeDemoZ}). Use Within-Person Z_SRB as primary reference.`;
   if (highReserveMaskingAlert) {
-    normativeSummaryText = `High Cognitive Reserve Alert: Raw score appears passable, but performance is ${compositeDemoZ} SD (${compositePercentile}th percentile) below expected ceiling for Age ${profile.ageYears} with ${profile.educationYears} yrs education.`;
+    normativeSummaryText = `[Exploratory High-Reserve Alert] Raw score appears passable, but Z_prior = ${compositeDemoZ} SD (${compositePercentile}th %ile) is below literature expectation for Age ${profile.ageYears} / ${profile.educationYears}y edu. Confirm via repeat-run Z_SRB.`;
   } else if (compositeDemoZ <= -1.5) {
-    normativeSummaryText = `Below expected baseline for Age ${profile.ageYears}, ${profile.educationYears} yrs education (${compositePercentile}th percentile, Z = ${compositeDemoZ}).`;
+    normativeSummaryText = `[Exploratory Literature Prior] Below expected range for Age ${profile.ageYears}, ${profile.educationYears}y edu (${compositePercentile}th %ile, Z_prior = ${compositeDemoZ}). Confirm via repeat-run Z_SRB.`;
   }
 
   return {
     profile,
+    normSourceTag: 'SYNTHETIC_LITERATURE_PRIOR',
+    tailWeightApplied: tailWeight,
     expectedMedianRtMs,
     expectedTauLapseMs,
     expectedMathAccuracyPct,

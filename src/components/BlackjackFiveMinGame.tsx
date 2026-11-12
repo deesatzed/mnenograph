@@ -12,6 +12,7 @@ import {
   computeSequenceAndAssociativeScores,
   computeWithinConditionSwitchMetrics,
   type DemographicProfileInput,
+  type InputDeviceModality,
   type RawRtSampleInput
 } from '../psychometrics/psychometrics';
 
@@ -51,6 +52,8 @@ export interface HandRecord {
   pointerIdleDuringTrial: boolean;
 }
 
+export type RunConditionTag = 'NORMAL_PLAY' | 'PERTURBATION_CONTROL';
+
 export interface SavedBlackjackSessionSummary {
   sessionId: string;
   playerLabel: string;
@@ -58,6 +61,8 @@ export interface SavedBlackjackSessionSummary {
   ageYears: number;
   educationYears: number;
   gameFamiliarity: 'LOW' | 'MODERATE' | 'HIGH';
+  inputDevice?: InputDeviceModality;
+  runConditionTag?: RunConditionTag;
   targetCapSec: number;
   handsPlayed: number;
   validEngagedHands: number;
@@ -83,6 +88,11 @@ export interface SavedBlackjackSessionSummary {
   compositePercentile: number;
   clockNoonErrorDeg: number | null;
   clockDurationSec: number | null;
+  // Raw engaged trial vectors persisted to enable Multi-Run Same-Player Pooling (unlocking N>=12 power across short 2:00 games!)
+  engagedDecisionRtsMs?: number[];
+  engagedCognitiveRtsMs?: number[];
+  quadrantBetRts?: { quadrant: 'Q1' | 'Q2' | 'Q3' | 'Q4'; rtMs: number }[];
+  navonTrialItems?: { isRotated: boolean; rtMs: number; isCorrect: boolean }[];
 }
 
 const SUITS: { suit: Suit; name: 'Spades' | 'Hearts' | 'Diamonds' | 'Clubs' }[] = [
@@ -339,13 +349,17 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   onUpdateStationTelemetry,
   onFinishSession
 }) => {
-  // Player / Family Member Label & Demographic Baseline Profile
+  // Player / Family Member Label, Input Device Modality, Progressive Onboarding & Calibration Mode
   const [playerLabel, setPlayerLabel] = useState<string>('Me (Primary Tester)');
   const [demoProfile, setDemoProfile] = useState<DemographicProfileInput>({
     ageYears: 65,
     educationYears: 16, // 12=High School, 14=Some College/Trade, 16=Bachelor's, 18=Master's, 20=MD/JD/PhD
-    gameFamiliarity: 'MODERATE'
+    gameFamiliarity: 'MODERATE',
+    inputDevice: 'MOUSE'
   });
+  const [deviceAutoDetected, setDeviceAutoDetected] = useState<boolean>(false);
+  const [progressiveOnboarding, setProgressiveOnboarding] = useState<boolean>(true);
+  const [runConditionTag, setRunConditionTag] = useState<RunConditionTag>('NORMAL_PLAY');
   const [setupBarExpanded, setSetupBarExpanded] = useState<boolean>(true);
 
   // Strict Wall-Clock Appointment Time Cap (120s Fast Test, 210s Clinic Pillar, 300s 5-Min Shoe)
@@ -354,6 +368,9 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const effectivePaused = isPaused || externalPaused;
   const [showTesterLab, setShowTesterLab] = useState<boolean>(false);
+  const [currentShoeId, setCurrentShoeId] = useState<string>(
+    () => `BJ-${Date.now().toString().slice(-5)}-R1`
+  );
   const autoSavedCurrentShoeRef = useRef<boolean>(false);
 
   // Real-World Distraction / Window Blur / Post-Pause Re-Orientation State
@@ -455,29 +472,47 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     }
   });
 
-  // Track window blur / visibility change & pointer activity to separate external clinic distractions from cognitive lapses
+  // Track window blur / visibility change, pointer activity, and auto-detect Touch vs Mouse vs Trackpad!
   useEffect(() => {
-    const onPointerActivity = () => {
+    const onPointerDown = (ev: PointerEvent) => {
       lastPointerActivityRef.current = performance.now();
+      if (!deviceAutoDetected) {
+        if (ev.pointerType === 'touch' || ev.pointerType === 'pen') {
+          setDemoProfile((p) => ({ ...p, inputDevice: 'TOUCH' }));
+          setDeviceAutoDetected(true);
+        }
+      }
+    };
+    const onPointerMove = () => {
+      lastPointerActivityRef.current = performance.now();
+    };
+    const onWheel = (ev: WheelEvent) => {
+      // Fractional or smooth pixel deltaX/deltaY wheel bursts are characteristic of laptop trackpads
+      if (!deviceAutoDetected && (Math.abs(ev.deltaX) > 0 || (Math.abs(ev.deltaY) > 0 && Math.abs(ev.deltaY) < 40))) {
+        setDemoProfile((p) => ({ ...p, inputDevice: 'TRACKPAD' }));
+        setDeviceAutoDetected(true);
+      }
     };
     const onVisibilityOrBlur = () => {
       if (document.hidden) {
         setHadInterruptionThisHand(true);
       }
     };
-    window.addEventListener('pointerdown', onPointerActivity);
-    window.addEventListener('pointermove', onPointerActivity);
-    window.addEventListener('keydown', onPointerActivity);
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('wheel', onWheel, { passive: true });
+    window.addEventListener('keydown', onPointerMove);
     document.addEventListener('visibilitychange', onVisibilityOrBlur);
     window.addEventListener('blur', onVisibilityOrBlur);
     return () => {
-      window.removeEventListener('pointerdown', onPointerActivity);
-      window.removeEventListener('pointermove', onPointerActivity);
-      window.removeEventListener('keydown', onPointerActivity);
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onPointerMove);
       document.removeEventListener('visibilitychange', onVisibilityOrBlur);
       window.removeEventListener('blur', onVisibilityOrBlur);
     };
-  }, []);
+  }, [deviceAutoDetected]);
 
   // Strict Wall-Clock Shoe Timer (Stops on WARMUP_INTRO, Pause, or SHOE_COMPLETE_SUMMARY)
   useEffect(() => {
@@ -575,62 +610,188 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     const implicitSavingsMs =
       anchor1 && anchor2 ? Math.round(anchor1.decisionRtMs - anchor2.decisionRtMs) : null;
 
+    // Compare against prior saved sessions for this exact Player/Family Member:
+    // 1) Multi-Run Trial Pooling (unlocks N>=12 Tail/Kurtosis/Ex-Gaussian & Quadrant KW power across short 2:00 runs!)
+    // 2) Device-Normalized Motor-Subtracted Z_SRB Reproducibility
+    // 3) 3-Step Self-Validation Calibration Checklist (Baseline -> Normal Replication -> Perturbation Sensitivity)
+    // Compare against PRIOR saved sessions (strictly excluding currentShoeId so auto-saving Run 1 never double-counts Run 1 against itself!)
+    const priorSamePersonRuns = savedSessions.filter(
+      (s) =>
+        s.sessionId !== currentShoeId &&
+        s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+        s.validEngagedHands >= 3
+    );
+    const priorSamePersonNormalRuns = priorSamePersonRuns.filter(
+      (s) => (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY'
+    );
+
+    const priorPooledRts: number[] = [];
+    for (const sr of priorSamePersonNormalRuns) {
+      if (sr.engagedDecisionRtsMs && sr.engagedDecisionRtsMs.length > 0) {
+        const motorShift = motorBaselineRtMs - (sr.motorBaselineRtMs ?? motorBaselineRtMs);
+        for (const rt of sr.engagedDecisionRtsMs) {
+          priorPooledRts.push(Math.max(180, Math.round(rt + motorShift)));
+        }
+      }
+    }
+    const currentNormalRts =
+      runConditionTag === 'NORMAL_PLAY' ? engagedHands.map((h) => h.decisionRtMs) : [];
+    const combinedPooledSamples: RawRtSampleInput[] = [...priorPooledRts, ...currentNormalRts].map(
+      (rt, idx) => ({
+        trialNumber: idx + 1,
+        rtMs: rt,
+        isCorrect: true
+      })
+    );
+    const pooledDist = analyzeRobustRtDistribution(combinedPooledSamples);
+    const pooledRunsCount =
+      priorSamePersonNormalRuns.length +
+      (runConditionTag === 'NORMAL_PLAY' && engagedHands.length > 0 ? 1 : 0);
+
+    const effectiveTailDist =
+      !dist.isTailMomentsPowered && pooledDist.isTailMomentsPowered ? pooledDist : dist;
+
     const demoNorms = computeDemographicNormedScore(demoProfile, {
       medianRtMs: dist.medianRtMs || 1150,
-      exGaussianTauMs: dist.exGaussianTauMs || 180,
-      bowleySkewness: dist.bowleyQuantileSkewness,
+      exGaussianTauMs: effectiveTailDist.exGaussianTauMs || 180,
+      bowleySkewness: effectiveTailDist.bowleyQuantileSkewness,
       mathOptimalRatePct: mathRatePct,
-      upsideDownDetectionRatePct: udRatePct
+      upsideDownDetectionRatePct: udRatePct,
+      validSampleCount: effectiveTailDist.validEngagedCount || dist.validEngagedCount
     });
 
-    // Compare against prior saved sessions for this exact Player/Family Member to test Signal vs. Noise Reproducibility
-    const samePersonRuns = savedSessions.filter(
-      (s) => s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() && s.validEngagedHands >= 3
+    // Empirical Local Household Cohort Reference (across saved normal human runs)
+    const allNormalHouseholdRuns = savedSessions.filter(
+      (s) => (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY' && s.validEngagedHands >= 3
     );
+    const householdCogRts = allNormalHouseholdRuns.map(
+      (s) => s.cognitiveMedianRtMs ?? Math.max(160, s.medianDecisionRtMs - 300)
+    );
+    const householdMedianCogMs = householdCogRts.length >= 2 ? med(householdCogRts) : null;
+    const householdMadCogMs =
+      householdMedianCogMs !== null
+        ? Math.max(25, med(householdCogRts.map((v) => Math.abs(v - householdMedianCogMs))))
+        : null;
+
     let reproducibilitySummary: {
       hasBaseline: boolean;
       baselineMedianMs: number | null;
-      deltaMedianMs: number | null;
+      baselineCognitiveMs: number | null;
+      deltaCognitiveMs: number | null;
+      deviceChanged: boolean;
+      baselineDevice: InputDeviceModality | null;
       srbZ: number | null;
       verdictText: string;
     } = {
       hasBaseline: false,
       baselineMedianMs: null,
-      deltaMedianMs: null,
+      baselineCognitiveMs: null,
+      deltaCognitiveMs: null,
+      deviceChanged: false,
+      baselineDevice: null,
       srbZ: null,
       verdictText:
         'First baseline session for this player — complete & save this run, then play a 2nd run to test within-person reproducibility.'
     };
 
-    if (samePersonRuns.length > 0 && dist.validEngagedCount >= 3) {
-      const baseRun = samePersonRuns[samePersonRuns.length - 1]; // Earliest baseline run for this person
-      const deltaMs = dist.medianRtMs - baseRun.medianDecisionRtMs;
+    if (priorSamePersonNormalRuns.length > 0 && dist.validEngagedCount >= 3) {
+      const baseRun = priorSamePersonNormalRuns[priorSamePersonNormalRuns.length - 1]; // Earliest normal baseline run
+      const baseCogMs =
+        baseRun.cognitiveMedianRtMs ??
+        Math.max(160, baseRun.medianDecisionRtMs - (baseRun.motorBaselineRtMs ?? 300));
+      const deltaCogMs = cognitiveMedianRtMs - baseCogMs;
       const pooledSe = Math.max(45, Math.hypot(dist.seMedianRtMs || 60, baseRun.seMedianRtMs || 60));
-      const srbZ = Number((deltaMs / (pooledSe * 1.414)).toFixed(2));
+      const srbZ = Number((deltaCogMs / (pooledSe * 1.414)).toFixed(2));
       const isReproducible = Math.abs(srbZ) <= 1.65;
+      const baseDev = baseRun.inputDevice ?? 'MOUSE';
+      const curDev = demoProfile.inputDevice ?? 'MOUSE';
+      const devChanged = baseDev !== curDev;
+      const devNote = devChanged
+        ? ` [⚠️ Input changed ${baseDev} → ${curDev}: using Motor-Subtracted Cognitive RT]`
+        : '';
+
       reproducibilitySummary = {
         hasBaseline: true,
         baselineMedianMs: baseRun.medianDecisionRtMs,
-        deltaMedianMs: deltaMs,
+        baselineCognitiveMs: baseCogMs,
+        deltaCognitiveMs: deltaCogMs,
+        deviceChanged: devChanged,
+        baselineDevice: baseDev,
         srbZ,
         verdictText: isReproducible
-          ? `✅ REPRODUCIBLE SIGNAL (|Z_SRB| = ${Math.abs(srbZ)} ≤ 1.65): Median RT (${dist.medianRtMs}ms) tracks closely with ${playerLabel}'s baseline (${baseRun.medianDecisionRtMs}ms, Δ=${deltaMs >= 0 ? '+' : ''}${deltaMs}ms). Low random noise!`
-          : `⚠️ SIGNIFICANT SHIFT FROM PERSONAL BASELINE (Z_SRB = ${srbZ >= 0 ? '+' : ''}${srbZ}): Median RT shifted by ${deltaMs >= 0 ? '+' : ''}${deltaMs}ms vs. baseline (${baseRun.medianDecisionRtMs}ms). Check if intentional test perturbation or fatigue.`
+          ? `✅ REPRODUCIBLE SIGNAL (|Z_SRB| = ${Math.abs(srbZ)} ≤ 1.65): Motor-Subtracted Cognitive RT (${cognitiveMedianRtMs}ms) tracks closely with ${playerLabel}'s baseline (${baseCogMs}ms, Δ=${deltaCogMs >= 0 ? '+' : ''}${deltaCogMs}ms).${devNote}`
+          : `⚠️ SIGNIFICANT SHIFT FROM PERSONAL BASELINE (Z_SRB = ${srbZ >= 0 ? '+' : ''}${srbZ}): Motor-Subtracted Cognitive RT shifted by ${deltaCogMs >= 0 ? '+' : ''}${deltaCogMs}ms vs. baseline (${baseCogMs}ms).${devNote}`
       };
+    }
+
+    // 3-Step Self-Validation Calibration Status (Run 1 Baseline -> Run 2 Normal Replication -> Run 3 Perturbation Control)
+    const allSavedNormalForPerson = savedSessions.filter(
+      (s) =>
+        s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+        (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY' &&
+        s.validEngagedHands >= 3
+    );
+    const step1Done = allSavedNormalForPerson.length >= 1;
+    let step2Done = false;
+    if (allSavedNormalForPerson.length >= 2) {
+      const r1 = allSavedNormalForPerson[allSavedNormalForPerson.length - 1];
+      const r2 = allSavedNormalForPerson[allSavedNormalForPerson.length - 2];
+      const c1 = r1.cognitiveMedianRtMs ?? r1.medianDecisionRtMs - 300;
+      const c2 = r2.cognitiveMedianRtMs ?? r2.medianDecisionRtMs - 300;
+      const se = Math.max(45, Math.hypot(r1.seMedianRtMs || 60, r2.seMedianRtMs || 60));
+      step2Done = Math.abs((c2 - c1) / (se * 1.414)) <= 1.65;
+    } else if (
+      priorSamePersonNormalRuns.length >= 1 &&
+      runConditionTag === 'NORMAL_PLAY' &&
+      dist.validEngagedCount >= 4 &&
+      reproducibilitySummary.srbZ !== null &&
+      Math.abs(reproducibilitySummary.srbZ) <= 1.65
+    ) {
+      step2Done = true;
+    }
+
+    const savedPerturbRuns = savedSessions.filter(
+      (s) =>
+        s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+        s.runConditionTag === 'PERTURBATION_CONTROL' &&
+        s.validEngagedHands >= 3
+    );
+    let step3Done = false;
+    if (step1Done) {
+      const baseRun = allSavedNormalForPerson[allSavedNormalForPerson.length - 1];
+      const baseCog = baseRun.cognitiveMedianRtMs ?? baseRun.medianDecisionRtMs - 300;
+      const checkPerturb = (cogMs: number, seMs: number) => {
+        const se = Math.max(45, Math.hypot(seMs || 60, baseRun.seMedianRtMs || 60));
+        return (cogMs - baseCog) / (se * 1.414) > 1.65;
+      };
+      if (savedPerturbRuns.some((p) => checkPerturb(p.cognitiveMedianRtMs, p.seMedianRtMs))) {
+        step3Done = true;
+      } else if (
+        runConditionTag === 'PERTURBATION_CONTROL' &&
+        dist.validEngagedCount >= 4 &&
+        reproducibilitySummary.srbZ !== null &&
+        reproducibilitySummary.srbZ > 1.65
+      ) {
+        step3Done = true;
+      }
     }
 
     // Outcome Data Usefulness Scorecard (Tells tester honestly whether this run's data is clinic-grade vs under-sampled)
     const sampleGrade =
-      dist.validEngagedCount >= 10
-        ? 'HIGH (≥10 valid hands — Clinic-Grade)'
+      dist.validEngagedCount >= 12
+        ? 'HIGH (≥12 hands — Full Tail & KW Power)'
+        : pooledDist.isTailMomentsPowered
+        ? `POOLED HIGH (${dist.validEngagedCount} now / ${pooledDist.validEngagedCount} pooled)`
         : dist.validEngagedCount >= 6
-        ? 'MODERATE (6–9 hands — Good Pilot Screen)'
-        : 'LOW (<6 hands — Play ≥2:00 for stable quantiles)';
+        ? 'MODERATE (6–11 hands — Median/IQR Ready; Tail Gated)'
+        : 'LOW (<6 hands — Play ≥2:00 for stable Median)';
     const splitHalfConsistent =
       splitHalfDiffMs !== null ? splitHalfDiffMs <= Math.max(320, dist.iqrRtMs * 0.85) : null;
 
     return {
       dist,
+      pooledDist,
+      pooledRunsCount,
       handsPlayed: n,
       motorBaselineRtMs,
       cognitiveMedianRtMs,
@@ -651,12 +812,21 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
         Q3: med(byQ.Q3),
         Q4: med(byQ.Q4)
       },
+      householdMedianCogMs,
+      householdMadCogMs,
+      householdRunsCount: householdCogRts.length,
+      calibrationSteps: {
+        step1Done,
+        step2Done,
+        step3Done,
+        allVerified: step1Done && step2Done && step3Done
+      },
       demoNorms,
       reproducibilitySummary
     };
-  }, [handRecords, demoProfile, savedSessions, playerLabel]);
+  }, [handRecords, demoProfile, savedSessions, playerLabel, runConditionTag, currentShoeId]);
 
-  // Synchronize authentic, UNPADDED Blackjack telemetry into the main PostCircECD StationTelemetryMap
+  // Synchronize authentic, UNPADDED Blackjack telemetry (with genuine same-player multi-run quadrant pooling!)
   const syncAllTelemetryToApp = (
     records: HandRecord[],
     snapHits: number,
@@ -671,28 +841,81 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     const engaged = records.filter((r) => !r.isPausedOrBlurred && !r.postPauseWarmup);
     if (engaged.length === 0) return;
 
-    // Genuine unpadded quadrant trials (no 4x artificial sample inflation!)
-    const qTrials = engaged.map((r) => ({
-      quadrant: r.betQuadrant,
-      rtMs: r.betPlacementRtMs,
-      euclideanDistancePx: 140,
-      trajectoryLengthPx: wrongCornerTapCount > 0 ? 168 : 144
-    }));
+    // Combine genuine prior same-player normal quadrant deals (never synthetic duplication!) so 2x 2:00 runs unlock KW p-values!
+    const priorSamePlayerQuadDeals =
+      runConditionTag === 'NORMAL_PLAY'
+        ? savedSessions
+            .filter(
+              (s) =>
+                s.sessionId !== currentShoeId &&
+                s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+                (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY' &&
+                Array.isArray(s.quadrantBetRts)
+            )
+            .flatMap((s) =>
+              (s.quadrantBetRts ?? []).map((q) => ({
+                quadrant: q.quadrant,
+                rtMs: q.rtMs,
+                euclideanDistancePx: 140,
+                trajectoryLengthPx: 144
+              }))
+            )
+        : [];
+
+    const qTrials = [
+      ...priorSamePlayerQuadDeals,
+      ...engaged.map((r) => ({
+        quadrant: r.betQuadrant,
+        rtMs: r.betPlacementRtMs,
+        euclideanDistancePx: 140,
+        trajectoryLengthPx: wrongCornerTapCount > 0 ? 168 : 144
+      }))
+    ];
     const s03 = computeQuadrantKruskalWallis(qTrials, Math.max(15, elapsedSec));
 
-    // Commensurate RT & accuracy scale across clean upright 2-card hands ('local'/uncrowded)
-    // vs. rotated 180° or 3+ card ensemble hands ('global'/crowded) — prevents fast bonus-flip RTs
-    // from inverting GLDI = rcsGlobal / rcsLocal into a false-positive PCA flag!
-    const navonTrials = engaged.map((r) => {
-      const isCrowdedOrRotated = r.upsideDownPresent || (r.playerCardCount ?? 2) >= 3;
-      return {
-        level: (isCrowdedOrRotated ? 'global' : 'local') as 'global' | 'local',
-        crowded: isCrowdedOrRotated,
+    // Commensurate RT & accuracy scale conditioned strictly on the INITIAL deal state (r.upsideDownPresent),
+    // pooled across same-player normal runs, and gated until >=5 upright & >=5 rotated hands (N>=10 total)
+    // so 2/3 = 66.7% binomial quantization on a 6-hand quick run never triggers a false PCA/Crowding flag!
+    const priorSamePlayerNavon =
+      runConditionTag === 'NORMAL_PLAY'
+        ? savedSessions
+            .filter(
+              (s) =>
+                s.sessionId !== currentShoeId &&
+                s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+                (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY' &&
+                Array.isArray(s.navonTrialItems)
+            )
+            .flatMap((s) =>
+              (s.navonTrialItems ?? []).map((item) => ({
+                level: (item.isRotated ? 'global' : 'local') as 'global' | 'local',
+                crowded: item.isRotated,
+                rtMs: item.rtMs,
+                isCorrect: item.isCorrect
+              }))
+            )
+        : [];
+
+    const navonTrials = [
+      ...priorSamePlayerNavon,
+      ...engaged.map((r) => ({
+        level: (r.upsideDownPresent ? 'global' : 'local') as 'global' | 'local',
+        crowded: r.upsideDownPresent,
         rtMs: r.decisionRtMs,
         isCorrect: r.mathOptimalDecision
-      };
-    });
-    const s11 = computeNavonGlobalLocalMetrics(navonTrials, Math.max(15, elapsedSec));
+      }))
+    ];
+    const rawS11 = computeNavonGlobalLocalMetrics(navonTrials, Math.max(15, elapsedSec));
+    const nGlobal = navonTrials.filter((t) => t.level === 'global').length;
+    const nLocal = navonTrials.filter((t) => t.level === 'local').length;
+    const s11 =
+      nGlobal >= 5 && nLocal >= 5
+        ? rawS11
+        : {
+            ...rawS11,
+            gldiRatio: null,
+            crowdingCostRatio: null
+          };
 
     const switchTrials = engaged.map((r) => ({
       condition: r.sideRuleCondition,
@@ -831,10 +1054,10 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       p2 = { ...currentShoe.pop()! };
       d2 = { ...currentShoe.pop()! };
 
-      // Guarantee natural Discard Snap Match opportunity on Hand #4 and Hand #8 if sparse so 2:00 runs never have 0/0!
+      // Guarantee natural Discard Snap Match opportunity on Hand #4, #5, and #8 so even 6-hand progressive runs get >=2 clean probes!
       if (
         lastDiscardTopCard &&
-        (handNumber === 4 || handNumber === 8) &&
+        (handNumber === 4 || handNumber === 5 || handNumber === 8) &&
         p1.rank !== lastDiscardTopCard.rank &&
         p2.rank !== lastDiscardTopCard.rank &&
         d1.rank !== lastDiscardTopCard.rank
@@ -878,8 +1101,10 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       }
     }
 
-    // Track whether this hand creates a natural Discard Snap Match opportunity
+    // Track whether this hand creates a natural Discard Snap Match opportunity (ONLY when Discard Tray is visible on felt!)
+    const isDiscardTrayVisibleOnHand = !progressiveOnboarding || handNumber >= 4;
     if (
+      isDiscardTrayVisibleOnHand &&
       lastDiscardTopCard &&
       (p1.rank === lastDiscardTopCard.rank ||
         p2.rank === lastDiscardTopCard.rank ||
@@ -911,7 +1136,23 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     const openingEval = evaluateBlackjackHand([p1, p2]);
     if (openingEval.isBlackjack) {
       setHandBanner(
-        `🎉 Natural 21 Dealt! (Check for any upside-down card or Snap Match first, then tap Claim Blackjack 21!)`
+        `🎉 Natural 21 Dealt! ${
+          !progressiveOnboarding || handNumber >= 3
+            ? '(Check for any upside-down card or Snap Match first, then tap Claim Blackjack 21!)'
+            : 'Tap Claim Blackjack 21! (1.5x Payout)'
+        }`
+      );
+    } else if (progressiveOnboarding && handNumber === 3) {
+      setHandBanner(
+        `🦅 Dealer Misdeal Bonus Live! Tap any upside-down card on the felt for +$50, then play your 21 hand!`
+      );
+    } else if (progressiveOnboarding && handNumber === 4) {
+      setHandBanner(
+        `🗂️ Discard Tray Open Above! Tap 🔔 Snap Match (+$50) whenever a card matches last hand’s discard!`
+      );
+    } else if (progressiveOnboarding && handNumber === 5) {
+      setHandBanner(
+        `🔥 Full Lounge Table Unlocked! Side-Pot Bonus (+$40) & Discard Snap (+$50) are both live!`
       );
     } else {
       setHandBanner(`Hand #${handNumber} Dealt ($${chipAmount} Bet) — Hit, Stand, or Double Down!`);
@@ -1162,13 +1403,16 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const handleSaveSessionSnapshot = (): SavedBlackjackSessionSummary => {
     const { dist, demoNorms } = telemetryAnalytics;
+    const engagedNow = handRecords.filter((h) => !h.isPausedOrBlurred && !h.postPauseWarmup);
     const snap: SavedBlackjackSessionSummary = {
-      sessionId: `BJ-${Date.now().toString().slice(-5)}`,
+      sessionId: currentShoeId,
       playerLabel: playerLabel.trim() || 'Me (Primary Tester)',
       timestampIso: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       ageYears: demoProfile.ageYears,
       educationYears: demoProfile.educationYears,
       gameFamiliarity: demoProfile.gameFamiliarity,
+      inputDevice: demoProfile.inputDevice ?? 'MOUSE',
+      runConditionTag,
       targetCapSec: targetDurationSec,
       handsPlayed: telemetryAnalytics.handsPlayed,
       validEngagedHands: dist.validEngagedCount,
@@ -1193,9 +1437,22 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       compositeDemoZ: demoNorms.compositeDemoZ,
       compositePercentile: demoNorms.compositePercentile,
       clockNoonErrorDeg,
-      clockDurationSec
+      clockDurationSec,
+      engagedDecisionRtsMs: engagedNow.map((h) => h.decisionRtMs),
+      engagedCognitiveRtsMs: engagedNow.map((h) =>
+        Math.max(160, h.decisionRtMs - telemetryAnalytics.motorBaselineRtMs)
+      ),
+      quadrantBetRts: engagedNow.map((h) => ({
+        quadrant: h.betQuadrant,
+        rtMs: h.betPlacementRtMs
+      })),
+      navonTrialItems: engagedNow.map((h) => ({
+        isRotated: h.upsideDownPresent,
+        rtMs: h.decisionRtMs,
+        isCorrect: h.mathOptimalDecision
+      }))
     };
-    const next = [snap, ...savedSessions].slice(0, 24);
+    const next = [snap, ...savedSessions.filter((s) => s.sessionId !== currentShoeId)].slice(0, 24);
     setSavedSessions(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -1235,8 +1492,16 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
     }
 
     const nextNum = handNumber + 1;
-    const corners: ('Q1' | 'Q2' | 'Q3' | 'Q4')[] = ['Q2', 'Q1', 'Q3', 'Q4'];
-    setActiveBetCorner(corners[nextNum % 4]);
+    const cornerCycle: ('Q1' | 'Q2' | 'Q3' | 'Q4')[] = ['Q3', 'Q1', 'Q2', 'Q4'];
+    const priorDealOffset = savedSessions
+      .filter(
+        (s) =>
+          s.sessionId !== currentShoeId &&
+          s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+          (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY'
+      )
+      .reduce((acc, s) => acc + (s.quadrantBetRts?.length ?? s.validEngagedHands ?? 0), 0);
+    setActiveBetCorner(cornerCycle[(priorDealOffset + (nextNum - 1)) % 4]);
 
     // Trigger Happy Hour Noon Clock Bonus after Hand 4 (if not completed yet)
     if (handNumber === 4 && !clockCompletedOnce) {
@@ -1255,6 +1520,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
 
   const handleResetForNewRun = () => {
     autoSavedCurrentShoeRef.current = false;
+    setCurrentShoeId(`BJ-${Date.now().toString().slice(-5)}-R${savedSessions.length + 2}`);
     setElapsedSec(0);
     setIsPaused(false);
     setShoe(buildShuffledShoe(savedSessions.length + 2));
@@ -1310,6 +1576,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
       'Age',
       'EduYrs',
       'Familiarity',
+      'InputDevice',
+      'RunCondition',
       'ElapsedSec',
       'EngagedHands',
       'CensoredHands',
@@ -1340,6 +1608,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
         s.ageYears,
         s.educationYears,
         s.gameFamiliarity || 'MODERATE',
+        s.inputDevice || 'MOUSE',
+        s.runConditionTag || 'NORMAL_PLAY',
         s.elapsedSec,
         s.validEngagedHands,
         s.censoredDistractionHands,
@@ -1481,6 +1751,25 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </label>
 
             <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Input:
+              <select
+                value={demoProfile.inputDevice ?? 'MOUSE'}
+                onChange={(e) => {
+                  setDeviceAutoDetected(true);
+                  setDemoProfile((p) => ({
+                    ...p,
+                    inputDevice: e.target.value as InputDeviceModality
+                  }));
+                }}
+                className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-sky-300 font-bold cursor-pointer"
+              >
+                <option value="MOUSE">🖱️ Mouse</option>
+                <option value="TRACKPAD">💻 Trackpad</option>
+                <option value="TOUCH">📱 Touch / iPad</option>
+              </select>
+            </label>
+
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
               Time Cap:
               <select
                 value={targetDurationSec}
@@ -1490,6 +1779,34 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
                 <option value={120}>2:00 (Fast Family/Bug Test)</option>
                 <option value={210}>3:30 (Clinic Pillar Cap)</option>
                 <option value={300}>5:00 (Full 5-Min Shoe)</option>
+              </select>
+            </label>
+
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Bonuses:
+              <select
+                value={progressiveOnboarding ? 'PROGRESSIVE' : 'ALL_HAND_1'}
+                onChange={(e) => setProgressiveOnboarding(e.target.value === 'PROGRESSIVE')}
+                className="px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-emerald-300 font-bold cursor-pointer"
+              >
+                <option value="PROGRESSIVE">Gentle Ramp-Up (Hands 1→5)</option>
+                <option value="ALL_HAND_1">All Bonuses from Hand #1</option>
+              </select>
+            </label>
+
+            <label className="flex items-center gap-1 text-slate-300 font-semibold">
+              Run Tag:
+              <select
+                value={runConditionTag}
+                onChange={(e) => setRunConditionTag(e.target.value as RunConditionTag)}
+                className={`px-2 py-1 rounded-lg border font-bold cursor-pointer ${
+                  runConditionTag === 'PERTURBATION_CONTROL'
+                    ? 'bg-amber-950 border-amber-400 text-amber-200'
+                    : 'bg-slate-900 border-slate-700 text-slate-200'
+                }`}
+              >
+                <option value="NORMAL_PLAY">Normal Play</option>
+                <option value="PERTURBATION_CONTROL">Perturbation Control (Step 3)</option>
               </select>
             </label>
           </div>
@@ -1521,7 +1838,8 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs">
           <span className="text-slate-300 font-semibold">
             👤 Seated at Table: <strong className="text-amber-300">{playerLabel}</strong> •{' '}
-            {formatMmSs(targetDurationSec)} Shoe
+            {formatMmSs(targetDurationSec)} Shoe • {demoProfile.inputDevice ?? 'MOUSE'}
+            {runConditionTag === 'PERTURBATION_CONTROL' ? ' • 🧪 Perturbation Control' : ''}
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -1653,6 +1971,16 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
           <button
             type="button"
             onClick={() => {
+              const cornerCycle: ('Q1' | 'Q2' | 'Q3' | 'Q4')[] = ['Q3', 'Q1', 'Q2', 'Q4'];
+              const priorDealOffset = savedSessions
+                .filter(
+                  (s) =>
+                    s.sessionId !== currentShoeId &&
+                    s.playerLabel.trim().toLowerCase() === playerLabel.trim().toLowerCase() &&
+                    (s.runConditionTag ?? 'NORMAL_PLAY') === 'NORMAL_PLAY'
+                )
+                .reduce((acc, s) => acc + (s.quadrantBetRts?.length ?? s.validEngagedHands ?? 0), 0);
+              setActiveBetCorner(cornerCycle[(priorDealOffset + (handNumber - 1)) % 4]);
               setSetupBarExpanded(false);
               setShowTesterLab(false);
               cornerOnsetRef.current = performance.now();
@@ -1727,108 +2055,119 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
          ===================================================================== */}
       {(tableStage === 'PLAYER_TURN' || tableStage === 'HAND_RESULT') && (
         <div className="rounded-2xl bg-[#0D231A] border-2 border-emerald-500/60 p-6 space-y-5 shadow-2xl">
-          {/* Top Table Rail: Side-Pot Rule + On-Felt Discard Tray (Snap Match & Natural Peek!) */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {/* Active Side-Pot Rule Strip */}
-            <div className="rounded-xl bg-slate-950/90 border border-amber-400/60 p-3 flex items-center justify-between gap-2">
-              <div className="text-xs font-extrabold text-amber-300">
-                {sideRuleMode === 'SUIT_MATCH'
-                  ? '🔥 Side-Pot: Match Dealer’s Up-Card SUIT (+$40)'
-                  : '⚡ Side-Pot: Hold a 7 or Total 14 (+$40)'}
-              </div>
+          {/* Progressive Top Table Rail:
+              - Hands #1-#3 (when progressiveOnboarding is active): Clean zero-clutter felt so older/novice family members settle into pure 21 + 180° flips!
+              - Hand #4: Discard Tray slides in cleanly on its own!
+              - Hand #5+: Full Side-Pot + Discard Tray rail active! */}
+          {(!progressiveOnboarding || handNumber >= 4) && (
+            <div
+              className={`grid grid-cols-1 ${
+                !progressiveOnboarding || handNumber >= 5 ? 'lg:grid-cols-2' : ''
+              } gap-3`}
+            >
+              {/* Active Side-Pot Rule Strip (Unlocks on Hand #5 in Progressive Ramp-Up) */}
+              {(!progressiveOnboarding || handNumber >= 5) && (
+                <div className="rounded-xl bg-slate-950/90 border border-amber-400/60 p-3 flex items-center justify-between gap-2">
+                  <div className="text-xs font-extrabold text-amber-300">
+                    {sideRuleMode === 'SUIT_MATCH'
+                      ? '🔥 Side-Pot: Match Dealer’s Up-Card SUIT (+$40)'
+                      : '⚡ Side-Pot: Hold a 7 or Total 14 (+$40)'}
+                  </div>
 
-              {tableStage === 'PLAYER_TURN' && (
-                <button
-                  type="button"
-                  disabled={sideRuleClaimed}
-                  onClick={() => {
-                    const now = performance.now();
-                    lastPointerActivityRef.current = now;
-                    lastPreDecisionActionRef.current = now;
-                    setSideRuleClaimed(true);
-                    if (isSidePotConditionMet()) {
-                      setBankroll((b) => b + 40);
-                      setHandBanner('🔥 Side-Pot Bonus Claimed (+$40 Chips)!');
-                    } else {
-                      setHandBanner('No Side-Pot match on this hand—keep playing your 21 hand!');
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-xl font-extrabold text-xs border cursor-pointer shrink-0 ${
-                    sideRuleClaimed
-                      ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
-                      : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
-                  }`}
-                >
-                  {sideRuleClaimed ? '✓ Checked' : '🔥 Claim +$40'}
-                </button>
-              )}
-            </div>
-
-            {/* Natural On-Felt Discard Tray (Replaces Interrupting Memory Quizzes!) */}
-            <div className="rounded-xl bg-slate-950/90 border border-sky-500/50 p-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs font-bold text-slate-200">
-                🗂️ Discard Tray:{' '}
-                {!lastDiscardTopCard ? (
-                  <span className="text-slate-400">Empty (Hand #1)</span>
-                ) : discardPeekOpen ? (
-                  <span className="text-amber-300 font-extrabold">
-                    Last Discard Was {lastDiscardTopCard.rank}{lastDiscardTopCard.suit}
-                  </span>
-                ) : (
-                  <span className="text-sky-300">🂠 Face-Down (1 Card Ago)</span>
-                )}
-              </div>
-
-              {lastDiscardTopCard && tableStage === 'PLAYER_TURN' && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const now = performance.now();
-                      lastPointerActivityRef.current = now;
-                      lastPreDecisionActionRef.current = now;
-                      if (!discardPeekOpen) {
-                        setDiscardPeekOpen(true);
-                        setDiscardPeekCount((c) => c + 1);
-                      }
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-sky-200 cursor-pointer"
-                  >
-                    👁️ {discardPeekOpen ? 'Peeked' : 'Peek Discard'}
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={discardSnapClaimedThisHand}
-                    onClick={() => {
-                      const now = performance.now();
-                      lastPointerActivityRef.current = now;
-                      lastPreDecisionActionRef.current = now;
-                      setDiscardSnapClaimedThisHand(true);
-                      if (isDiscardSnapMatchValid()) {
-                        setBankroll((b) => b + 50);
-                        setDiscardSnapHits((h) => h + 1);
-                        setHandBanner(
-                          `🔔 Snap Match! You remembered the ${lastDiscardTopCard.rank} in the Discard Tray (+$50)!`
-                        );
-                      } else {
-                        setHandBanner(
-                          `No ${lastDiscardTopCard.rank} showing on the table this hand—keep playing!`
-                        );
-                      }
-                    }}
-                    className={`px-3 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer ${
-                      discardSnapClaimedThisHand
-                        ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
-                        : 'bg-sky-600 hover:bg-sky-500 border-sky-300 text-white'
-                    }`}
-                  >
-                    {discardSnapClaimedThisHand ? '✓ Snap Checked' : '🔔 Snap Match (+$50)'}
-                  </button>
+                  {tableStage === 'PLAYER_TURN' && (
+                    <button
+                      type="button"
+                      disabled={sideRuleClaimed}
+                      onClick={() => {
+                        const now = performance.now();
+                        lastPointerActivityRef.current = now;
+                        lastPreDecisionActionRef.current = now;
+                        setSideRuleClaimed(true);
+                        if (isSidePotConditionMet()) {
+                          setBankroll((b) => b + 40);
+                          setHandBanner('🔥 Side-Pot Bonus Claimed (+$40 Chips)!');
+                        } else {
+                          setHandBanner('No Side-Pot match on this hand—keep playing your 21 hand!');
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-xl font-extrabold text-xs border cursor-pointer shrink-0 ${
+                        sideRuleClaimed
+                          ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
+                          : 'bg-amber-500 hover:bg-amber-400 border-amber-200 text-slate-950'
+                      }`}
+                    >
+                      {sideRuleClaimed ? '✓ Checked' : '🔥 Claim +$40'}
+                    </button>
+                  )}
                 </div>
               )}
+
+              {/* Natural On-Felt Discard Tray (Unlocks on Hand #4 in Progressive Ramp-Up!) */}
+              <div className="rounded-xl bg-slate-950/90 border border-sky-500/50 p-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-bold text-slate-200">
+                  🗂️ Discard Tray:{' '}
+                  {!lastDiscardTopCard ? (
+                    <span className="text-slate-400">Empty (Hand #1)</span>
+                  ) : discardPeekOpen ? (
+                    <span className="text-amber-300 font-extrabold">
+                      Last Discard Was {lastDiscardTopCard.rank}{lastDiscardTopCard.suit}
+                    </span>
+                  ) : (
+                    <span className="text-sky-300">🂠 Face-Down (1 Card Ago)</span>
+                  )}
+                </div>
+
+                {lastDiscardTopCard && tableStage === 'PLAYER_TURN' && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const now = performance.now();
+                        lastPointerActivityRef.current = now;
+                        lastPreDecisionActionRef.current = now;
+                        if (!discardPeekOpen) {
+                          setDiscardPeekOpen(true);
+                          setDiscardPeekCount((c) => c + 1);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 text-[11px] font-bold text-sky-200 cursor-pointer"
+                    >
+                      👁️ {discardPeekOpen ? 'Peeked' : 'Peek Discard'}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={discardSnapClaimedThisHand}
+                      onClick={() => {
+                        const now = performance.now();
+                        lastPointerActivityRef.current = now;
+                        lastPreDecisionActionRef.current = now;
+                        setDiscardSnapClaimedThisHand(true);
+                        if (isDiscardSnapMatchValid()) {
+                          setBankroll((b) => b + 50);
+                          setDiscardSnapHits((h) => h + 1);
+                          setHandBanner(
+                            `🔔 Snap Match! You remembered the ${lastDiscardTopCard.rank} in the Discard Tray (+$50)!`
+                          );
+                        } else {
+                          setHandBanner(
+                            `No ${lastDiscardTopCard.rank} showing on the table this hand—keep playing!`
+                          );
+                        }
+                      }}
+                      className={`px-3 py-1 rounded-lg text-[11px] font-extrabold border cursor-pointer ${
+                        discardSnapClaimedThisHand
+                          ? 'bg-emerald-900 border-emerald-400 text-emerald-200'
+                          : 'bg-sky-600 hover:bg-sky-500 border-sky-300 text-white'
+                      }`}
+                    >
+                      {discardSnapClaimedThisHand ? '✓ Snap Checked' : '🔔 Snap Match (+$50)'}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Dealer Hand vs Player Hand Felt */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
@@ -2036,7 +2375,7 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </svg>
           </div>
 
-          <div className="flex justify-center gap-3">
+          <div className="flex flex-wrap justify-center gap-3">
             <button
               type="button"
               onClick={() => {
@@ -2046,6 +2385,17 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
               className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-bold text-slate-300 cursor-pointer"
             >
               ↺ Clear Dial
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setClockCompletedOnce(true);
+                cornerOnsetRef.current = performance.now();
+                setTableStage('PLACE_CORNER_BET');
+              }}
+              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-400 cursor-pointer"
+            >
+              Skip Happy Hour &rarr;
             </button>
             <button
               type="button"
@@ -2231,7 +2581,59 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             </div>
           </div>
 
-          {/* Within-Person Signal vs. Noise Reproducibility Verdict */}
+          {/* 3-STEP SELF-VALIDATION INSTRUMENT CHECKLIST (Run 1 Baseline -> Run 2 Replication -> Run 3 Perturbation) */}
+          <div className="p-3 rounded-xl bg-slate-900/90 border border-sky-500/40 space-y-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-extrabold uppercase tracking-wider text-sky-300 text-[11px]">
+                🧪 3-Step Self-Validation Protocol ({playerLabel}):
+              </span>
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
+                  telemetryAnalytics.calibrationSteps.allVerified
+                    ? 'bg-emerald-500/20 border border-emerald-400 text-emerald-300'
+                    : 'bg-slate-800 border border-slate-700 text-slate-300'
+                }`}
+              >
+                {telemetryAnalytics.calibrationSteps.allVerified
+                  ? '✅ INSTRUMENT VERIFIED (Low Noise + Perturbation Sensitive)'
+                  : 'In Progress — Complete 3 Quick Runs to Verify Signal vs. Noise'}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+              <div
+                className={`p-2 rounded-lg border ${
+                  telemetryAnalytics.calibrationSteps.step1Done
+                    ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                <strong>{telemetryAnalytics.calibrationSteps.step1Done ? '✓' : '1.'} Step 1 (Baseline):</strong>{' '}
+                Play &amp; save 1 Normal run.
+              </div>
+              <div
+                className={`p-2 rounded-lg border ${
+                  telemetryAnalytics.calibrationSteps.step2Done
+                    ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                <strong>{telemetryAnalytics.calibrationSteps.step2Done ? '✓' : '2.'} Step 2 (Replication):</strong>{' '}
+                2nd Normal run tracks within |Z_SRB| ≤ 1.65.
+              </div>
+              <div
+                className={`p-2 rounded-lg border ${
+                  telemetryAnalytics.calibrationSteps.step3Done
+                    ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                <strong>{telemetryAnalytics.calibrationSteps.step3Done ? '✓' : '3.'} Step 3 (Perturbation):</strong>{' '}
+                Switch Run Tag to <em>Perturbation Control</em> &amp; hesitate ~1.5s (Z_SRB &gt; +1.65).
+              </div>
+            </div>
+          </div>
+
+          {/* Within-Person Signal vs. Noise Reproducibility Verdict (PRIMARY GOLD STANDARD) */}
           <div
             className={`p-3 rounded-xl border text-xs font-bold ${
               !reproducibilitySummary.hasBaseline
@@ -2242,95 +2644,123 @@ export const BlackjackFiveMinGame: React.FC<BlackjackFiveMinGameProps> = ({
             }`}
           >
             <div className="uppercase text-[10px] tracking-wider text-sky-300 mb-0.5">
-              🔁 Within-Person Reproducibility Check (Across Saved Runs):
+              🥇 Primary Reference — Within-Person Device-Normalized Z_SRB &amp; Household Cohort:
             </div>
             <div>{reproducibilitySummary.verdictText}</div>
+            {telemetryAnalytics.householdMedianCogMs !== null && (
+              <div className="mt-1 text-[11px] font-semibold text-sky-200">
+                🏠 Empirical Local Household Reference ({telemetryAnalytics.householdRunsCount} normal runs):{' '}
+                Median Cognitive RT = <strong>{telemetryAnalytics.householdMedianCogMs}ms</strong> ±{' '}
+                <strong>{telemetryAnalytics.householdMadCogMs}ms MAD</strong>
+              </div>
+            )}
           </div>
 
-          {/* Demographic Normative Verdict Strip */}
+          {/* Exploratory Demographic Literature Prior Strip (Explicitly Badged Tier-3 Prior!) */}
           <div
             className={`p-3 rounded-xl border text-xs font-bold flex flex-wrap items-center justify-between gap-2 ${
               demoNorms.highReserveMaskingAlert
                 ? 'bg-amber-950/60 border-amber-400 text-amber-200'
                 : demoNorms.compositeDemoZ <= -1.5
                 ? 'bg-rose-950/60 border-rose-400 text-rose-200'
-                : 'bg-emerald-950/50 border-emerald-500/50 text-emerald-200'
+                : 'bg-slate-900/90 border-slate-700 text-slate-200'
             }`}
           >
-            <span>🩺 {demoNorms.normativeSummaryText}</span>
-            <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-700 text-white">
-              Z_demo = {demoNorms.compositeDemoZ >= 0 ? '+' : ''}
+            <span>📚 {demoNorms.normativeSummaryText}</span>
+            <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-700 text-amber-200">
+              Prior Z = {demoNorms.compositeDemoZ >= 0 ? '+' : ''}
               {demoNorms.compositeDemoZ} SD ({demoNorms.compositePercentile}th %ile)
             </span>
           </div>
 
-          {/* 6 Scientific Distribution & Domain Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center">
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] font-bold uppercase text-slate-400">Median RT ± SE</div>
-              <div className="text-base font-extrabold text-white">
-                {dist.medianRtMs > 0 ? `${dist.medianRtMs} ± ${dist.seMedianRtMs}ms` : '—'}
-              </div>
-              <div className="text-[10px] text-sky-300">
-                Motor-Subtracted: {telemetryAnalytics.cognitiveMedianRtMs || '—'}ms (Motor: {telemetryAnalytics.motorBaselineRtMs}ms)
-              </div>
-            </div>
+          {/* 6 Scientific Distribution & Domain Cards (With Low-N Gate + Multi-Run Pooled Unlock!) */}
+          {(() => {
+            const usePooledTail =
+              !dist.isTailMomentsPowered && telemetryAnalytics.pooledDist.isTailMomentsPowered;
+            const activeTail = usePooledTail ? telemetryAnalytics.pooledDist : dist;
+            const tailPowered = activeTail.isTailMomentsPowered;
 
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] font-bold uppercase text-slate-400">MAD &amp; IQR Spread</div>
-              <div className="text-base font-extrabold text-emerald-300">
-                MAD: {dist.madRtMs || '—'}ms
-              </div>
-              <div className="text-[10px] text-slate-400">
-                IQR: {dist.iqrRtMs || '—'}ms • CoMAD: {dist.coMadRatio}
-              </div>
-            </div>
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center">
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Median RT ± SE</div>
+                  <div className="text-base font-extrabold text-white">
+                    {dist.medianRtMs > 0 ? `${dist.medianRtMs} ± ${dist.seMedianRtMs}ms` : '—'}
+                  </div>
+                  <div className="text-[10px] text-sky-300">
+                    Motor-Subtracted: {telemetryAnalytics.cognitiveMedianRtMs || '—'}ms ({demoProfile.inputDevice ?? 'MOUSE'})
+                  </div>
+                </div>
 
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] font-bold uppercase text-slate-400">Skewness &amp; Kurtosis</div>
-              <div className="text-sm font-extrabold text-amber-300">
-                Bowley Skew: {dist.bowleyQuantileSkewness}
-              </div>
-              <div className="text-[10px] text-slate-400">
-                Moors Kurt: {dist.moorsOctileKurtosisExcess} (g1={dist.sampleSkewnessG1 ?? '—'})
-              </div>
-            </div>
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">MAD &amp; IQR Spread</div>
+                  <div className="text-base font-extrabold text-emerald-300">
+                    MAD: {dist.madRtMs || '—'}ms
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    IQR: {dist.iqrRtMs || '—'}ms • CoMAD: {dist.coMadRatio}
+                  </div>
+                </div>
 
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] font-bold uppercase text-slate-400">Ex-Gaussian (μ / τ)</div>
-              <div className="text-sm font-extrabold text-sky-300">
-                μ={dist.exGaussianMuMs || '—'}ms • τ={dist.exGaussianTauMs || '—'}ms
-              </div>
-              <div className="text-[10px] text-slate-400">
-                Fatigue Slope: {telemetryAnalytics.fatigueSlopeMsPerHand >= 0 ? '+' : ''}
-                {telemetryAnalytics.fatigueSlopeMsPerHand}ms/hand
-              </div>
-            </div>
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">
+                    Skew &amp; Kurtosis {usePooledTail ? `(Pooled N=${activeTail.validEngagedCount})` : ''}
+                  </div>
+                  <div className="text-sm font-extrabold text-amber-300">
+                    {tailPowered
+                      ? `Bowley: ${activeTail.bowleyQuantileSkewness}`
+                      : `Low-N (${dist.validEngagedCount}/12)`}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {tailPowered
+                      ? `Moors Kurt: ${activeTail.moorsOctileKurtosisExcess}`
+                      : 'Pool ≥2 runs or play 5:00'}
+                  </div>
+                </div>
 
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] font-bold uppercase text-slate-400">180° Card &amp; 4-Corner</div>
-              <div className="text-sm font-extrabold text-amber-300">
-                180° Flip: {telemetryAnalytics.upsideDownSpotted}/{telemetryAnalytics.upsideDownOpportunities} ({telemetryAnalytics.upsideDownDetectionRatePct}%)
-              </div>
-              <div className="text-[10px] text-slate-400">
-                Medians: {telemetryAnalytics.qMedians.Q2}/{telemetryAnalytics.qMedians.Q1}/{telemetryAnalytics.qMedians.Q3}/{telemetryAnalytics.qMedians.Q4}ms
-              </div>
-            </div>
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">
+                    Ex-Gaussian (μ / τ) {usePooledTail ? '(Pooled)' : ''}
+                  </div>
+                  <div className="text-sm font-extrabold text-sky-300">
+                    {tailPowered
+                      ? `μ=${activeTail.exGaussianMuMs}ms • τ=${activeTail.exGaussianTauMs}ms`
+                      : `μ≈${dist.exGaussianMuMs || '—'}ms • τ Gated`}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Fatigue Slope: {telemetryAnalytics.fatigueSlopeMsPerHand >= 0 ? '+' : ''}
+                    {telemetryAnalytics.fatigueSlopeMsPerHand}ms/hand
+                  </div>
+                </div>
 
-            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
-              <div className="text-[10px] font-bold uppercase text-slate-400">Implicit &amp; Peek Memory</div>
-              <div className="text-sm font-extrabold text-emerald-300">
-                Snap: {discardSnapHits}/{discardSnapOpportunities} • Peeks: {discardPeekCount}
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">180° Card &amp; 4-Corner</div>
+                  <div className="text-sm font-extrabold text-amber-300">
+                    180° Flip: {telemetryAnalytics.upsideDownSpotted}/{telemetryAnalytics.upsideDownOpportunities} ({telemetryAnalytics.upsideDownDetectionRatePct}%)
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Medians: {telemetryAnalytics.qMedians.Q2}/{telemetryAnalytics.qMedians.Q1}/{telemetryAnalytics.qMedians.Q3}/{telemetryAnalytics.qMedians.Q4}ms
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Implicit &amp; Peek Memory</div>
+                  <div className="text-sm font-extrabold text-emerald-300">
+                    Snap: {discardSnapHits}/{discardSnapOpportunities} • Peeks: {discardPeekCount}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Anchor Savings: {telemetryAnalytics.implicitSavingsMs !== null ? `${telemetryAnalytics.implicitSavingsMs}ms` : 'Pending #6'}
+                  </div>
+                </div>
               </div>
-              <div className="text-[10px] text-slate-400">
-                Anchor Savings: {telemetryAnalytics.implicitSavingsMs !== null ? `${telemetryAnalytics.implicitSavingsMs}ms` : 'Pending #6'}
-              </div>
-            </div>
-          </div>
+            );
+          })()}
 
           <div className="text-[11px] text-slate-300 bg-slate-900/70 border border-slate-800 rounded-xl px-3.5 py-2">
             <strong className="text-sky-300">Distribution Signal vs. Noise Analysis:</strong>{' '}
-            {dist.clinicalDistributionInterpretation}
+            {!dist.isTailMomentsPowered && telemetryAnalytics.pooledDist.isTailMomentsPowered
+              ? `[Multi-Run Pooled Power Unlocked: N=${telemetryAnalytics.pooledDist.validEngagedCount} across ${telemetryAnalytics.pooledRunsCount} runs] ${telemetryAnalytics.pooledDist.clinicalDistributionInterpretation}`
+              : dist.clinicalDistributionInterpretation}
           </div>
 
           {/* Saved Repeated Sessions Comparison Table */}
